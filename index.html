@@ -11,6 +11,9 @@
     <!-- Background image layer (user-uploaded, draggable) -->
     <div id="background-layer"></div>
 
+    <!-- Background video layer (user-uploaded) -->
+    <video id="background-video" loop muted playsinline style="display: none;"></video>
+
     <!-- Animated topographic contour lines overlay -->
     <canvas id="topo-canvas"></canvas>
 
@@ -49,11 +52,16 @@
             <div class="accent-line"></div>
         </div>
 
+        <!-- Lyrics Section -->
+        <div class="lyrics-section" id="lyrics-section">
+            <div id="lyrics-content">Searching for lyrics...</div>
+        </div>
+
         <!-- Hardware Stats Section -->
         <div class="stats-section" id="stats-section">
             <div class="stat-row">
                 <div class="stat-item">
-                    <span class="stat-label">CPU</span>
+                    <span class="stat-label">Ryzen 5 9600x</span>
                     <span class="stat-value" id="cpu-usage">--%</span>
                     <span class="stat-temp" id="cpu-temp">--°C</span>
                 </div>
@@ -62,7 +70,7 @@
                     <div class="gpu-fan-container">
                         <img src="assets/gpu_fan.png" id="gpu-fan" class="gpu-fan">
                     </div>
-                    <span class="stat-label">GPU</span>
+                    <span class="stat-label">RTX 5070</span>
                     <span class="stat-value" id="gpu-usage">--%</span>
                     <span class="stat-temp" id="gpu-temp">--°C</span>
                 </div>

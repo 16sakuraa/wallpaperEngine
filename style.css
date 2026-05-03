@@ -4,6 +4,9 @@
 :root {
     --text-color: #ffffff;
     --text-color-sub: rgba(255, 255, 255, 0.7);
+    --text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    --effect-color: rgb(60, 180, 200);
+    --effect-color-rgb: 60, 180, 200;
 
     /* Clock positioning & size (updated by JS from WE sliders) */
     --clock-x: 50%;
@@ -23,11 +26,18 @@
 
     /* GPU Fan spin speed (updated by JS based on usage) */
     --gpu-spin-speed: 2s;
+    --gpu-fan-display: block;
 
     /* Overlay positioning & size (updated by JS from WE sliders) */
     --overlay-x: 50%;
     --overlay-y: 85%;
     --overlay-scale: 0.5;
+
+    /* Lyrics positioning & display */
+    --lyrics-x: 50%;
+    --lyrics-y: 65%;
+    --lyrics-width: 90%;
+    --lyrics-display: flex;
 }
 
 /* ==========================================
@@ -39,17 +49,20 @@
     box-sizing: border-box;
 }
 
-body, html {
+body {
+    margin: 0;
+    padding: 0;
     width: 100vw;
     height: 100vh;
-    overflow: hidden;
-    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-color, #0d0f18);
     color: var(--text-color);
-    background-color: #0d0f18;
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    text-shadow: var(--text-shadow);
 }
 
 /* ==========================================
-   Background Layer (User-uploaded image)
+   Custom Background Layer
    ========================================== */
 #background-layer {
     position: absolute;
@@ -57,16 +70,34 @@ body, html {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 0;
-    background-color: #0d0f18;
-    background-repeat: no-repeat;
-    background-position: 50% 50%;
+    background-color: var(--bg-color, #0d0f18);
     background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: -1;
+    transition: opacity 0.5s ease;
     cursor: grab;
 }
 
 #background-layer:active {
     cursor: grabbing;
+}
+
+/* ==========================================
+   Background Video Layer
+   ========================================== */
+#background-video {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    z-index: 0;
+    transform: translate(-50%, -50%);
+    object-fit: cover;
+    pointer-events: none;
 }
 
 /* ==========================================
@@ -253,6 +284,58 @@ body, html {
 }
 
 /* ==========================================
+   Lyrics Section
+   ========================================== */
+.lyrics-section {
+    position: absolute;
+    left: var(--lyrics-x);
+    top: var(--lyrics-y);
+    transform: translate(-50%, -50%);
+    width: var(--lyrics-width);
+    max-height: 25vh;
+    display: var(--lyrics-display);
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    overflow-y: auto;
+    padding: 30px 15px;
+    background: rgba(13, 15, 24, 0.4);
+    backdrop-filter: blur(5px);
+    border-radius: 15px;
+    mask-image: linear-gradient(to bottom, transparent, black 25%, black 75%, transparent);
+    scrollbar-width: none;
+    scroll-behavior: smooth;
+}
+
+.lyrics-section::-webkit-scrollbar {
+    display: none;
+}
+
+#lyrics-content {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.lyric-line {
+    font-size: 1rem;
+    line-height: 1.4;
+    font-weight: 500;
+    color: var(--text-color-sub);
+    transition: all 0.4s ease;
+    opacity: 0.4;
+    transform: scale(0.9);
+}
+
+.lyric-line.active {
+    color: var(--text-color);
+    opacity: 1;
+    transform: scale(1.1);
+    font-weight: 700;
+}
+
+/* ==========================================
    Hardware Stats Section
    ========================================== */
 .stats-section {
@@ -283,7 +366,7 @@ body, html {
     width: 40px;
     height: 40px;
     margin-bottom: 5px;
-    display: flex;
+    display: var(--gpu-fan-display);
     align-items: center;
     justify-content: center;
 }
@@ -302,9 +385,9 @@ body, html {
 }
 
 .stat-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 2px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1px;
     text-transform: uppercase;
     color: var(--text-color-sub);
 }

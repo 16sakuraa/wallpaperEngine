@@ -29,18 +29,100 @@ updateTime();
 // ==========================================
 window.wallpaperRegisterMediaPropertiesListener = window.wallpaperRegisterMediaPropertiesListener || function() {};
 window.wallpaperRegisterMediaThumbnailListener = window.wallpaperRegisterMediaThumbnailListener || function() {};
+window.wallpaperRegisterMediaTimelineListener = window.wallpaperRegisterMediaTimelineListener || function() {};
+
+let currentSyncedLyrics = [];
 
 window.wallpaperRegisterMediaPropertiesListener((event) => {
     const titleEl = document.getElementById('track-title');
     const artistEl = document.getElementById('track-artist');
+    const lyricsEl = document.getElementById('lyrics-content');
 
     if (event && event.title) {
+        const oldTitle = titleEl.textContent;
         titleEl.textContent = event.title;
         artistEl.textContent = event.artist || "Unknown Artist";
+
+        if (event.title !== oldTitle) {
+            fetchLyrics(event.title, event.artist);
+        }
     } else {
         titleEl.textContent = "No Track Playing";
         artistEl.textContent = "Waiting for media...";
+        lyricsEl.innerHTML = "";
+        currentSyncedLyrics = [];
     }
+});
+
+async function fetchLyrics(title, artist) {
+    const lyricsEl = document.getElementById('lyrics-content');
+    lyricsEl.innerHTML = '<div class="lyric-line active">Searching...</div>';
+    currentSyncedLyrics = [];
+    
+    try {
+        const cleanTitle = title.split('(')[0].split('-')[0].trim();
+        const cleanArtist = (artist || "").split(',')[0].split('feat')[0].trim();
+
+        const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(cleanArtist)}&track_name=${encodeURIComponent(cleanTitle)}`);
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            if (data.syncedLyrics) {
+                currentSyncedLyrics = data.syncedLyrics.split('\n').map(line => {
+                    const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
+                    if (match) {
+                        const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
+                        return { time, text: match[3].trim() };
+                    }
+                    return null;
+                }).filter(l => l && l.text);
+                renderLyrics(currentSyncedLyrics);
+            } else if (data.plainLyrics) {
+                lyricsEl.innerHTML = `<div class="lyric-line active">${data.plainLyrics}</div>`;
+            } else {
+                lyricsEl.innerHTML = '<div class="lyric-line">No lyrics found.</div>';
+            }
+        } else {
+            lyricsEl.innerHTML = '<div class="lyric-line">No lyrics found.</div>';
+        }
+    } catch (e) {
+        lyricsEl.innerHTML = "";
+    }
+}
+
+function renderLyrics(lyrics) {
+    const lyricsEl = document.getElementById('lyrics-content');
+    lyricsEl.innerHTML = lyrics.map((l, i) => `<div class="lyric-line" id="lyric-${i}">${l.text}</div>`).join('');
+}
+
+window.wallpaperRegisterMediaTimelineListener((event) => {
+    if (!currentSyncedLyrics.length) return;
+    const position = event.position;
+    
+    let activeIndex = 0;
+    for (let i = 0; i < currentSyncedLyrics.length; i++) {
+        if (position >= currentSyncedLyrics[i].time) {
+            activeIndex = i;
+        } else {
+            break;
+        }
+    }
+
+    const lines = document.querySelectorAll('.lyric-line');
+    const container = document.getElementById('lyrics-section');
+    
+    lines.forEach((line, i) => {
+        if (i === activeIndex) {
+            if (!line.classList.contains('active')) {
+                line.classList.add('active');
+                const offset = line.offsetTop - (container.offsetHeight / 2) + (line.offsetHeight / 2);
+                container.scrollTo({ top: offset, behavior: 'smooth' });
+            }
+        } else {
+            line.classList.remove('active');
+        }
+    });
 });
 
 window.wallpaperRegisterMediaThumbnailListener((event) => {
@@ -98,6 +180,25 @@ window.wallpaperPropertyListener = {
             updateBackgroundStyle();
         }
 
+        // Background Position
+        if (properties.bg_x) {
+            bgOffsetX = properties.bg_x.value;
+            updateBackgroundStyle();
+        }
+        if (properties.bg_y) {
+            bgOffsetY = properties.bg_y.value;
+            updateBackgroundStyle();
+        }
+
+        // Background Color
+        if (properties.bgcolor) {
+            const colorParts = properties.bgcolor.value.split(' ');
+            const r = Math.ceil(colorParts[0] * 255);
+            const g = Math.ceil(colorParts[1] * 255);
+            const b = Math.ceil(colorParts[2] * 255);
+            document.documentElement.style.setProperty('--bg-color', `rgb(${r}, ${g}, ${b})`);
+        }
+
         // Text Color
         if (properties.textcolor) {
             const colorParts = properties.textcolor.value.split(' ');
@@ -109,6 +210,32 @@ window.wallpaperPropertyListener = {
 
             document.documentElement.style.setProperty('--text-color', colorStr);
             document.documentElement.style.setProperty('--text-color-sub', subColorStr);
+        }
+
+        // Effect Color
+        if (properties.effect_color) {
+            const colorParts = properties.effect_color.value.split(' ');
+            const r = Math.ceil(colorParts[0] * 255);
+            const g = Math.ceil(colorParts[1] * 255);
+            const b = Math.ceil(colorParts[2] * 255);
+            document.documentElement.style.setProperty('--effect-color', `rgb(${r}, ${g}, ${b})`);
+            document.documentElement.style.setProperty('--effect-color-rgb', `${r}, ${g}, ${b}`);
+        }
+
+        // Background Video
+        if (properties.bgvideo) {
+            const videoEl = document.getElementById('background-video');
+            if (properties.bgvideo.value) {
+                videoEl.src = 'file:///' + properties.bgvideo.value;
+                videoEl.style.display = 'block';
+                videoEl.play();
+                bgLayer.style.opacity = '0'; // Hide image layer if video is present
+            } else {
+                videoEl.pause();
+                videoEl.src = '';
+                videoEl.style.display = 'none';
+                bgLayer.style.opacity = '1';
+            }
         }
 
         // Clock Position & Size
@@ -147,6 +274,39 @@ window.wallpaperPropertyListener = {
         // Show/Hide Stats
         if (properties.show_stats) {
             document.documentElement.style.setProperty('--stats-display', properties.show_stats.value ? 'flex' : 'none');
+        }
+
+        // Show/Hide GPU Fan
+        if (properties.show_gpu_fan) {
+            document.documentElement.style.setProperty('--gpu-fan-display', properties.show_gpu_fan.value ? 'flex' : 'none');
+        }
+
+        // Show/Hide Lyrics
+        if (properties.show_lyrics) {
+            document.documentElement.style.setProperty('--lyrics-display', properties.show_lyrics.value ? 'flex' : 'none');
+        }
+        if (properties.lyrics_y) {
+            document.documentElement.style.setProperty('--lyrics-y', properties.lyrics_y.value + '%');
+        }
+        if (properties.lyrics_x) {
+            document.documentElement.style.setProperty('--lyrics-x', properties.lyrics_x.value + '%');
+        }
+        if (properties.lyrics_size) {
+            document.documentElement.style.setProperty('--lyrics-width', properties.lyrics_size.value + '%');
+        }
+
+        // Drop Shadow
+        if (properties.show_shadow || properties.shadow_blur || properties.shadow_opacity) {
+            const show = (properties.show_shadow) ? properties.show_shadow.value : true;
+            const blur = (properties.shadow_blur) ? properties.shadow_blur.value : 4;
+            const opacity = (properties.shadow_opacity) ? properties.shadow_opacity.value : 50;
+            
+            if (show) {
+                const shadowStr = `0 ${blur/2}px ${blur}px rgba(0, 0, 0, ${opacity / 100})`;
+                document.documentElement.style.setProperty('--text-shadow', shadowStr);
+            } else {
+                document.documentElement.style.setProperty('--text-shadow', 'none');
+            }
         }
 
         // Background Effect
@@ -249,11 +409,13 @@ window.currentBgEffect = 'topo';
         const levels = 10;
         const levelSpacing = 1.7 / levels;
 
+        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
+
         ctx.lineWidth = 1;
         for (let level = 0; level < levels; level++) {
             const threshold = -0.85 + level * levelSpacing;
             const alpha = 0.1 + (level % 3) * 0.05;
-            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
             ctx.beginPath();
             let drawing = false;
 
@@ -289,7 +451,9 @@ window.currentBgEffect = 'topo';
         const gridSize = 50;
         const speed = time * 40;
 
-        ctx.strokeStyle = 'rgba(60, 180, 200, 0.25)';
+        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
+
+        ctx.strokeStyle = `rgba(${colorRGB}, 0.25)`;
         ctx.lineWidth = 1;
 
         // Horizontal lines (perspective)
@@ -299,7 +463,7 @@ window.currentBgEffect = 'topo';
             if (y > h) continue;
             
             const alpha = Math.max(0, (y - horizon) / (h - horizon)) * 0.5;
-            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
             ctx.beginPath();
             ctx.moveTo(0, y);
             ctx.lineTo(w, y);
@@ -313,7 +477,7 @@ window.currentBgEffect = 'topo';
             const xBottom = w / 2 + (i * w * 0.8);
             
             const alpha = 0.3;
-            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
             ctx.beginPath();
             ctx.moveTo(xTop, horizon);
             ctx.lineTo(xBottom, h);
@@ -326,6 +490,8 @@ window.currentBgEffect = 'topo';
         time += 0.05;
         const w = canvas.width;
         const h = canvas.height;
+
+        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
 
         // Random horizontal scans
         if (Math.random() > 0.8) {
@@ -346,9 +512,10 @@ window.currentBgEffect = 'topo';
         if (Math.random() > 0.95) {
             const y = Math.random() * h;
             const offset = Math.random() * 5;
-            ctx.fillStyle = 'rgba(255, 0, 80, 0.1)';
+            // Use user color for split lines too
+            ctx.fillStyle = `rgba(${colorRGB}, 0.2)`;
             ctx.fillRect(offset, y, w, 2);
-            ctx.fillStyle = 'rgba(0, 255, 200, 0.1)';
+            ctx.fillStyle = `rgba(${colorRGB}, 0.2)`;
             ctx.fillRect(-offset, y + 2, w, 2);
         }
     }
@@ -356,16 +523,20 @@ window.currentBgEffect = 'topo';
     function mainLoop() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        switch (window.currentBgEffect) {
-            case 'topo':
-                drawTopo();
-                break;
-            case 'grid':
-                drawGrid();
-                break;
-            case 'glitch':
-                drawGlitch();
-                break;
+        if (window.currentBgEffect === 'none') {
+            // Animation is off, do nothing
+        } else {
+            switch (window.currentBgEffect) {
+                case 'topo':
+                    drawTopo();
+                    break;
+                case 'grid':
+                    drawGrid();
+                    break;
+                case 'glitch':
+                    drawGlitch();
+                    break;
+            }
         }
 
         requestAnimationFrame(mainLoop);

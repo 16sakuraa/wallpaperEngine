@@ -9,6 +9,15 @@
         "type": "file",
         "filetype": "image"
       },
+      "bgvideo": {
+        "text": "Background Video (MP4)",
+        "type": "file"
+      },
+      "bgcolor": {
+        "text": "Solid Background Color",
+        "type": "color",
+        "value": "0.05 0.06 0.09"
+      },
       "bgscale": {
         "text": "Background Scale (%)",
         "type": "slider",
@@ -16,15 +25,35 @@
         "max": 300,
         "value": 100
       },
+      "bg_x": {
+        "text": "Background — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "bg_y": {
+        "text": "Background — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
       "bg_effect": {
         "text": "Background Animation",
         "type": "combo",
         "value": "topo",
         "options": [
+          { "label": "Off", "value": "none" },
           { "label": "Topographic Lines", "value": "topo" },
           { "label": "Synthwave Grid", "value": "grid" },
           { "label": "VHS Glitch", "value": "glitch" }
         ]
+      },
+      "effect_color": {
+        "text": "Animation Color",
+        "type": "color",
+        "value": "0.23 0.70 0.78"
       },
       "overlayimage": {
         "text": "Overlay Image (PNG)",
@@ -104,6 +133,11 @@
         "type": "bool",
         "value": true
       },
+      "show_gpu_fan": {
+        "text": "Show Animated GPU Fan",
+        "type": "bool",
+        "value": true
+      },
       "stats_x": {
         "text": "HW Stats — Horizontal Position",
         "type": "slider",
@@ -124,6 +158,51 @@
         "min": 20,
         "max": 200,
         "value": 100
+      },
+      "show_shadow": {
+        "text": "Enable Text Shadow",
+        "type": "bool",
+        "value": true
+      },
+      "shadow_blur": {
+        "text": "Shadow Blur",
+        "type": "slider",
+        "min": 0,
+        "max": 20,
+        "value": 4
+      },
+      "shadow_opacity": {
+        "text": "Shadow Opacity (%)",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "show_lyrics": {
+        "text": "Show Spotify Lyrics",
+        "type": "bool",
+        "value": true
+      },
+      "lyrics_y": {
+        "text": "Lyrics — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 65
+      },
+      "lyrics_x": {
+        "text": "Lyrics — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "lyrics_size": {
+        "text": "Lyrics — Width/Size",
+        "type": "slider",
+        "min": 20,
+        "max": 100,
+        "value": 90
       }
     }
   }
