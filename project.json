@@ -1,0 +1,130 @@
+{
+  "title": "Vertical Media Wallpaper",
+  "type": "web",
+  "file": "index.html",
+  "general": {
+    "properties": {
+      "bgimage": {
+        "text": "Background Image",
+        "type": "file",
+        "filetype": "image"
+      },
+      "bgscale": {
+        "text": "Background Scale (%)",
+        "type": "slider",
+        "min": 10,
+        "max": 300,
+        "value": 100
+      },
+      "bg_effect": {
+        "text": "Background Animation",
+        "type": "combo",
+        "value": "topo",
+        "options": [
+          { "label": "Topographic Lines", "value": "topo" },
+          { "label": "Synthwave Grid", "value": "grid" },
+          { "label": "VHS Glitch", "value": "glitch" }
+        ]
+      },
+      "overlayimage": {
+        "text": "Overlay Image (PNG)",
+        "type": "file",
+        "filetype": "image"
+      },
+      "overlay_x": {
+        "text": "Overlay — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "overlay_y": {
+        "text": "Overlay — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 85
+      },
+      "overlay_size": {
+        "text": "Overlay — Size",
+        "type": "slider",
+        "min": 5,
+        "max": 200,
+        "value": 50
+      },
+      "textcolor": {
+        "text": "Text Color",
+        "type": "color",
+        "value": "1 1 1"
+      },
+      "clock_x": {
+        "text": "Clock — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "clock_y": {
+        "text": "Clock — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 20
+      },
+      "clock_size": {
+        "text": "Clock — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
+      },
+      "music_x": {
+        "text": "Music Player — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "music_y": {
+        "text": "Music Player — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "music_size": {
+        "text": "Music Player — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
+      },
+      "show_stats": {
+        "text": "Show CPU/GPU Stats",
+        "type": "bool",
+        "value": true
+      },
+      "stats_x": {
+        "text": "HW Stats — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "stats_y": {
+        "text": "HW Stats — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 75
+      },
+      "stats_size": {
+        "text": "HW Stats — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
+      }
+    }
+  }
+}

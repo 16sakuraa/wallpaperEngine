@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vertical Media Wallpaper</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Background image layer (user-uploaded, draggable) -->
+    <div id="background-layer"></div>
+
+    <!-- Animated topographic contour lines overlay -->
+    <canvas id="topo-canvas"></canvas>
+
+    <!-- Optional overlay image (PNG) -->
+    <div id="overlay-container">
+        <img id="overlay-image" src="" alt="">
+    </div>
+
+    <!-- Main content layout -->
+    <div class="layout-container">
+        <!-- Top spacer for vertical centering -->
+        <div class="top-spacer"></div>
+
+        <!-- Clock Section -->
+        <div class="clock-section">
+            <div class="clock-wrapper">
+                <!-- Chromatic aberration layers -->
+                <span id="time-red" class="time-layer time-red" aria-hidden="true">00:00</span>
+                <span id="time-green" class="time-layer time-green" aria-hidden="true">00:00</span>
+                <span id="time-blue" class="time-layer time-blue" aria-hidden="true">00:00</span>
+                <span id="time" class="time-layer time-main">00:00</span>
+            </div>
+            <div id="date-text">Sunday, May 03</div>
+        </div>
+
+        <!-- Music Player Section -->
+        <div class="music-section">
+            <div class="album-art-container">
+                <img id="album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/><circle cx='150' cy='150' r='40' fill='none' stroke='%23334' stroke-width='2'/><circle cx='150' cy='150' r='60' fill='none' stroke='%23334' stroke-width='1'/><circle cx='150' cy='150' r='80' fill='none' stroke='%23334' stroke-width='1'/></svg>" alt="Album Art">
+            </div>
+            <div class="track-info">
+                <h2 id="track-title">No Track Playing</h2>
+                <p id="track-artist">Waiting for media...</p>
+            </div>
+            <!-- Gradient accent line -->
+            <div class="accent-line"></div>
+        </div>
+
+        <!-- Hardware Stats Section -->
+        <div class="stats-section" id="stats-section">
+            <div class="stat-row">
+                <div class="stat-item">
+                    <span class="stat-label">CPU</span>
+                    <span class="stat-value" id="cpu-usage">--%</span>
+                    <span class="stat-temp" id="cpu-temp">--°C</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                    <div class="gpu-fan-container">
+                        <img src="assets/gpu_fan.png" id="gpu-fan" class="gpu-fan">
+                    </div>
+                    <span class="stat-label">GPU</span>
+                    <span class="stat-value" id="gpu-usage">--%</span>
+                    <span class="stat-temp" id="gpu-temp">--°C</span>
+                </div>
+            </div>
+            <div class="stat-status" id="hw-status">Connecting...</div>
+        </div>
+
+        <!-- Bottom spacer -->
+        <div class="bottom-spacer"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

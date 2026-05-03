@@ -1,0 +1,13 @@
+{
+  "name": "wallpaper-hw-monitor",
+  "version": "1.0.0",
+  "description": "Lightweight WebSocket server providing CPU/GPU stats to Wallpaper Engine",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "systeminformation": "^5.22.0",
+    "ws": "^8.16.0"
+  }
+}

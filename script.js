@@ -1,0 +1,457 @@
+// ==========================================
+// Clock Logic (24-hour format)
+// ==========================================
+function updateTime() {
+    const timeString = new Date().toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+
+    document.getElementById('time').textContent = timeString;
+    document.getElementById('time-red').textContent = timeString;
+    document.getElementById('time-green').textContent = timeString;
+    document.getElementById('time-blue').textContent = timeString;
+
+    const dateString = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: '2-digit'
+    });
+    document.getElementById('date-text').textContent = dateString;
+}
+
+setInterval(updateTime, 1000);
+updateTime();
+
+// ==========================================
+// Media Integration Logic
+// ==========================================
+window.wallpaperRegisterMediaPropertiesListener = window.wallpaperRegisterMediaPropertiesListener || function() {};
+window.wallpaperRegisterMediaThumbnailListener = window.wallpaperRegisterMediaThumbnailListener || function() {};
+
+window.wallpaperRegisterMediaPropertiesListener((event) => {
+    const titleEl = document.getElementById('track-title');
+    const artistEl = document.getElementById('track-artist');
+
+    if (event && event.title) {
+        titleEl.textContent = event.title;
+        artistEl.textContent = event.artist || "Unknown Artist";
+    } else {
+        titleEl.textContent = "No Track Playing";
+        artistEl.textContent = "Waiting for media...";
+    }
+});
+
+window.wallpaperRegisterMediaThumbnailListener((event) => {
+    const imgElement = document.getElementById('album-art');
+
+    if (event && event.thumbnail) {
+        imgElement.style.opacity = 0;
+        setTimeout(() => {
+            imgElement.src = event.thumbnail;
+            imgElement.style.opacity = 1;
+        }, 200);
+    } else {
+        imgElement.style.opacity = 0;
+        setTimeout(() => {
+            imgElement.src = "assets/default_art.jpg";
+            imgElement.style.opacity = 1;
+        }, 200);
+    }
+});
+
+// ==========================================
+// Custom Background & Draggable Logic
+// ==========================================
+const bgLayer = document.getElementById('background-layer');
+
+let bgOffsetX = parseFloat(localStorage.getItem('we_bgOffsetX')) || 50;
+let bgOffsetY = parseFloat(localStorage.getItem('we_bgOffsetY')) || 50;
+let bgScale = 100;
+
+function updateBackgroundStyle() {
+    bgLayer.style.backgroundPosition = `${bgOffsetX}% ${bgOffsetY}%`;
+    bgLayer.style.backgroundSize = `${bgScale}%`;
+}
+
+updateBackgroundStyle();
+
+// ==========================================
+// Wallpaper Engine Property Listener
+// ==========================================
+window.wallpaperPropertyListener = {
+    applyUserProperties: function(properties) {
+        // Background Image
+        if (properties.bgimage) {
+            if (properties.bgimage.value) {
+                const imagePath = 'file:///' + properties.bgimage.value;
+                bgLayer.style.backgroundImage = `url('${imagePath}')`;
+            } else {
+                bgLayer.style.backgroundImage = "none";
+            }
+        }
+
+        // Background Scale
+        if (properties.bgscale) {
+            bgScale = properties.bgscale.value;
+            updateBackgroundStyle();
+        }
+
+        // Text Color
+        if (properties.textcolor) {
+            const colorParts = properties.textcolor.value.split(' ');
+            const r = Math.ceil(colorParts[0] * 255);
+            const g = Math.ceil(colorParts[1] * 255);
+            const b = Math.ceil(colorParts[2] * 255);
+            const colorStr = `rgb(${r}, ${g}, ${b})`;
+            const subColorStr = `rgba(${r}, ${g}, ${b}, 0.7)`;
+
+            document.documentElement.style.setProperty('--text-color', colorStr);
+            document.documentElement.style.setProperty('--text-color-sub', subColorStr);
+        }
+
+        // Clock Position & Size
+        if (properties.clock_x) {
+            document.documentElement.style.setProperty('--clock-x', properties.clock_x.value + '%');
+        }
+        if (properties.clock_y) {
+            document.documentElement.style.setProperty('--clock-y', properties.clock_y.value + '%');
+        }
+        if (properties.clock_size) {
+            document.documentElement.style.setProperty('--clock-scale', properties.clock_size.value / 100);
+        }
+
+        // Music Player Position & Size
+        if (properties.music_x) {
+            document.documentElement.style.setProperty('--music-x', properties.music_x.value + '%');
+        }
+        if (properties.music_y) {
+            document.documentElement.style.setProperty('--music-y', properties.music_y.value + '%');
+        }
+        if (properties.music_size) {
+            document.documentElement.style.setProperty('--music-scale', properties.music_size.value / 100);
+        }
+
+        // Stats Position & Size
+        if (properties.stats_x) {
+            document.documentElement.style.setProperty('--stats-x', properties.stats_x.value + '%');
+        }
+        if (properties.stats_y) {
+            document.documentElement.style.setProperty('--stats-y', properties.stats_y.value + '%');
+        }
+        if (properties.stats_size) {
+            document.documentElement.style.setProperty('--stats-scale', properties.stats_size.value / 100);
+        }
+
+        // Show/Hide Stats
+        if (properties.show_stats) {
+            document.documentElement.style.setProperty('--stats-display', properties.show_stats.value ? 'flex' : 'none');
+        }
+
+        // Background Effect
+        if (properties.bg_effect) {
+            window.currentBgEffect = properties.bg_effect.value;
+        }
+
+        // Overlay Image
+        if (properties.overlayimage) {
+            const overlayImg = document.getElementById('overlay-image');
+            if (properties.overlayimage.value) {
+                overlayImg.src = 'file:///' + properties.overlayimage.value;
+            } else {
+                overlayImg.src = '';
+            }
+        }
+        if (properties.overlay_x) {
+            document.documentElement.style.setProperty('--overlay-x', properties.overlay_x.value + '%');
+        }
+        if (properties.overlay_y) {
+            document.documentElement.style.setProperty('--overlay-y', properties.overlay_y.value + '%');
+        }
+        if (properties.overlay_size) {
+            document.documentElement.style.setProperty('--overlay-scale', properties.overlay_size.value / 100);
+        }
+    }
+};
+
+// ==========================================
+// Drag to Move Background
+// ==========================================
+let isDragging = false;
+let startX, startY;
+let startOffsetX, startOffsetY;
+
+bgLayer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startOffsetX = bgOffsetX;
+    startOffsetY = bgOffsetY;
+});
+
+window.addEventListener('mouseup', () => {
+    if (isDragging) {
+        isDragging = false;
+        localStorage.setItem('we_bgOffsetX', bgOffsetX);
+        localStorage.setItem('we_bgOffsetY', bgOffsetY);
+    }
+});
+
+window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+
+    const deltaXPct = -(deltaX / window.innerWidth) * 100;
+    const deltaYPct = -(deltaY / window.innerHeight) * 100;
+
+    bgOffsetX = startOffsetX + (deltaXPct * 1.5);
+    bgOffsetY = startOffsetY + (deltaYPct * 1.5);
+
+    updateBackgroundStyle();
+});
+
+// ==========================================
+// Background Effects Engine (Topo, Grid, Glitch)
+// ==========================================
+window.currentBgEffect = 'topo';
+
+(function initBackgroundEffects() {
+    const canvas = document.getElementById('topo-canvas');
+    const ctx = canvas.getContext('2d');
+    let time = 0;
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- Topographic Logic ---
+    function noise(x, y, t) {
+        return (
+            Math.sin(x * 0.008 + t * 0.3) * 0.5 +
+            Math.sin(y * 0.006 - t * 0.2) * 0.5 +
+            Math.sin((x + y) * 0.005 + t * 0.15) * 0.4 +
+            Math.sin(x * 0.015 - y * 0.01 + t * 0.1) * 0.3
+        );
+    }
+
+    function drawTopo() {
+        time += 0.008;
+        const w = canvas.width;
+        const h = canvas.height;
+        const step = 8; 
+        const levels = 10;
+        const levelSpacing = 1.7 / levels;
+
+        ctx.lineWidth = 1;
+        for (let level = 0; level < levels; level++) {
+            const threshold = -0.85 + level * levelSpacing;
+            const alpha = 0.1 + (level % 3) * 0.05;
+            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.beginPath();
+            let drawing = false;
+
+            for (let y = 0; y < h; y += step) {
+                for (let x = 0; x < w; x += step) {
+                    const val = noise(x, y, time);
+                    const valRight = noise(x + step, y, time);
+                    const valDown = noise(x, y + step, time);
+
+                    if ((val - threshold) * (valRight - threshold) < 0) {
+                        const t_interp = (threshold - val) / (valRight - val);
+                        const cx = x + t_interp * step;
+                        if (!drawing) { ctx.moveTo(cx, y); drawing = true; } else { ctx.lineTo(cx, y); }
+                    }
+                    if ((val - threshold) * (valDown - threshold) < 0) {
+                        const t_interp = (threshold - val) / (valDown - val);
+                        const cy = y + t_interp * step;
+                        if (!drawing) { ctx.moveTo(x, cy); drawing = true; } else { ctx.lineTo(x, cy); }
+                    }
+                }
+                drawing = false;
+            }
+            ctx.stroke();
+        }
+    }
+
+    // --- Synthwave Grid Logic ---
+    function drawGrid() {
+        time += 0.02;
+        const w = canvas.width;
+        const h = canvas.height;
+        const horizon = h * 0.4;
+        const gridSize = 50;
+        const speed = time * 40;
+
+        ctx.strokeStyle = 'rgba(60, 180, 200, 0.25)';
+        ctx.lineWidth = 1;
+
+        // Horizontal lines (perspective)
+        for (let i = 0; i < 20; i++) {
+            const yOffset = (i * gridSize + (speed % gridSize));
+            const y = horizon + (Math.pow(yOffset / h, 2) * h * 1.5);
+            if (y > h) continue;
+            
+            const alpha = Math.max(0, (y - horizon) / (h - horizon)) * 0.5;
+            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+        }
+
+        // Vertical lines (perspective)
+        const verticalCount = 12;
+        for (let i = -verticalCount; i <= verticalCount; i++) {
+            const xTop = w / 2 + (i * (w / verticalCount) * 0.1);
+            const xBottom = w / 2 + (i * w * 0.8);
+            
+            const alpha = 0.3;
+            ctx.strokeStyle = `rgba(60, 180, 200, ${alpha})`;
+            ctx.beginPath();
+            ctx.moveTo(xTop, horizon);
+            ctx.lineTo(xBottom, h);
+            ctx.stroke();
+        }
+    }
+
+    // --- VHS Glitch Logic ---
+    function drawGlitch() {
+        time += 0.05;
+        const w = canvas.width;
+        const h = canvas.height;
+
+        // Random horizontal scans
+        if (Math.random() > 0.8) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.05})`;
+            ctx.fillRect(0, Math.random() * h, w, Math.random() * 10);
+        }
+
+        // Subtle static noise
+        for (let i = 0; i < 5; i++) {
+            const x = Math.random() * w;
+            const y = Math.random() * h;
+            const size = Math.random() * 2;
+            ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.2})`;
+            ctx.fillRect(x, y, size, size);
+        }
+
+        // Chromatic split lines (occasional)
+        if (Math.random() > 0.95) {
+            const y = Math.random() * h;
+            const offset = Math.random() * 5;
+            ctx.fillStyle = 'rgba(255, 0, 80, 0.1)';
+            ctx.fillRect(offset, y, w, 2);
+            ctx.fillStyle = 'rgba(0, 255, 200, 0.1)';
+            ctx.fillRect(-offset, y + 2, w, 2);
+        }
+    }
+
+    function mainLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        switch (window.currentBgEffect) {
+            case 'topo':
+                drawTopo();
+                break;
+            case 'grid':
+                drawGrid();
+                break;
+            case 'glitch':
+                drawGlitch();
+                break;
+        }
+
+        requestAnimationFrame(mainLoop);
+    }
+
+    mainLoop();
+})();
+
+// ==========================================
+// Hardware Monitor WebSocket Client
+// ==========================================
+(function initHWMonitor() {
+    const cpuUsageEl = document.getElementById('cpu-usage');
+    const cpuTempEl = document.getElementById('cpu-temp');
+    const gpuUsageEl = document.getElementById('gpu-usage');
+    const gpuTempEl = document.getElementById('gpu-temp');
+    const statusEl = document.getElementById('hw-status');
+
+    const WS_URL = 'ws://localhost:3985';
+    const RECONNECT_DELAY = 5000; // Try reconnecting every 5 seconds
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+
+        statusEl.textContent = 'Connecting...';
+        statusEl.className = 'stat-status';
+
+        try {
+            ws = new WebSocket(WS_URL);
+        } catch (e) {
+            scheduleReconnect();
+            return;
+        }
+
+        ws.onopen = () => {
+            statusEl.textContent = 'Connected';
+            statusEl.className = 'stat-status connected';
+            // Hide status text after 3 seconds
+            setTimeout(() => {
+                if (statusEl.classList.contains('connected')) {
+                    statusEl.style.opacity = '0';
+                }
+            }, 3000);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                cpuUsageEl.textContent = data.cpu_usage + '%';
+                cpuTempEl.textContent = (data.cpu_temp > 0) ? data.cpu_temp + '°C' : '--°C';
+                gpuUsageEl.textContent = data.gpu_usage + '%';
+                gpuTempEl.textContent = (data.gpu_temp > 0) ? data.gpu_temp + '°C' : '--°C';
+
+                // Update GPU Fan Spin Speed
+                // Usage 0% -> 5s (slow), Usage 100% -> 0.2s (fast)
+                const usage = data.gpu_usage || 0;
+                const spinDuration = 5 - (usage / 100) * 4.8; 
+                document.documentElement.style.setProperty('--gpu-spin-speed', `${spinDuration.toFixed(2)}s`);
+            } catch (e) {
+                // Ignore parse errors
+            }
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = 'stat-status error';
+            statusEl.style.opacity = '1';
+            scheduleReconnect();
+        };
+
+        ws.onerror = () => {
+            // onclose will fire after this, which handles reconnect
+        };
+    }
+
+    function scheduleReconnect() {
+        if (reconnectTimer) return;
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+        }, RECONNECT_DELAY);
+    }
+
+    // Start connection
+    connect();
+})();
