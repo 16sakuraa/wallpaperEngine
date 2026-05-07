@@ -203,6 +203,41 @@
         "min": 20,
         "max": 100,
         "value": 90
+      },
+      "show_weather": {
+        "text": "Show Weather",
+        "type": "bool",
+        "value": true
+      },
+      "weather_unit": {
+        "text": "Weather — Temperature Unit",
+        "type": "combo",
+        "value": "celsius",
+        "options": [
+          { "label": "Celsius (°C)", "value": "celsius" },
+          { "label": "Fahrenheit (°F)", "value": "fahrenheit" }
+        ]
+      },
+      "weather_x": {
+        "text": "Weather — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "weather_y": {
+        "text": "Weather — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 35
+      },
+      "weather_size": {
+        "text": "Weather — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
       }
     }
   }

@@ -28,7 +28,7 @@
         <div class="top-spacer"></div>
 
         <!-- Clock Section -->
-        <div class="clock-section">
+        <div class="clock-section glass-card">
             <div class="clock-wrapper">
                 <!-- Chromatic aberration layers -->
                 <span id="time-red" class="time-layer time-red" aria-hidden="true">00:00</span>
@@ -38,9 +38,23 @@
             </div>
             <div id="date-text">Sunday, May 03</div>
         </div>
+        
+        <!-- Weather Section -->
+        <div class="weather-section glass-card" id="weather-section">
+            <div class="weather-info">
+                <div class="weather-main">
+                    <span id="weather-temp">--°</span>
+                    <div id="weather-icon-container"></div>
+                </div>
+                <div class="weather-sub">
+                    <span id="weather-city">Loading...</span>
+                    <span id="weather-desc">--</span>
+                </div>
+            </div>
+        </div>
 
         <!-- Music Player Section -->
-        <div class="music-section">
+        <div class="music-section glass-card">
             <div class="album-art-container">
                 <img id="album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/><circle cx='150' cy='150' r='40' fill='none' stroke='%23334' stroke-width='2'/><circle cx='150' cy='150' r='60' fill='none' stroke='%23334' stroke-width='1'/><circle cx='150' cy='150' r='80' fill='none' stroke='%23334' stroke-width='1'/></svg>" alt="Album Art">
             </div>
@@ -48,17 +62,23 @@
                 <h2 id="track-title">No Track Playing</h2>
                 <p id="track-artist">Waiting for media...</p>
             </div>
-            <!-- Gradient accent line -->
-            <div class="accent-line"></div>
+            <!-- Music Progress Bar -->
+            <div class="progress-container">
+                <span id="time-current" class="progress-time">0:00</span>
+                <div class="progress-bar-wrapper">
+                    <div id="progress-bar" class="progress-bar-fill"></div>
+                </div>
+                <span id="time-total" class="progress-time">0:00</span>
+            </div>
         </div>
 
         <!-- Lyrics Section -->
-        <div class="lyrics-section" id="lyrics-section">
+        <div class="lyrics-section glass-card" id="lyrics-section">
             <div id="lyrics-content">Searching for lyrics...</div>
         </div>
 
         <!-- Hardware Stats Section -->
-        <div class="stats-section" id="stats-section">
+        <div class="stats-section glass-card" id="stats-section">
             <div class="stat-row">
                 <div class="stat-item">
                     <span class="stat-label">Ryzen 5 9600x</span>

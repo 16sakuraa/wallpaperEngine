@@ -32,6 +32,7 @@ window.wallpaperRegisterMediaThumbnailListener = window.wallpaperRegisterMediaTh
 window.wallpaperRegisterMediaTimelineListener = window.wallpaperRegisterMediaTimelineListener || function() {};
 
 let currentSyncedLyrics = [];
+let weatherUnit = "celsius";
 
 window.wallpaperRegisterMediaPropertiesListener((event) => {
     const titleEl = document.getElementById('track-title');
@@ -51,6 +52,9 @@ window.wallpaperRegisterMediaPropertiesListener((event) => {
         artistEl.textContent = "Waiting for media...";
         lyricsEl.innerHTML = "";
         currentSyncedLyrics = [];
+        document.getElementById('time-current').textContent = "0:00";
+        document.getElementById('time-total').textContent = "0:00";
+        document.getElementById('progress-bar').style.width = "0%";
     }
 });
 
@@ -97,6 +101,29 @@ function renderLyrics(lyrics) {
 }
 
 window.wallpaperRegisterMediaTimelineListener((event) => {
+    // Update Progress Bar
+    const currentEl = document.getElementById('time-current');
+    const totalEl = document.getElementById('time-total');
+    const barEl = document.getElementById('progress-bar');
+    
+    if (event && event.duration > 0) {
+        const formatTime = (timeInSeconds) => {
+            const minutes = Math.floor(timeInSeconds / 60);
+            const seconds = Math.floor(timeInSeconds % 60).toString().padStart(2, '0');
+            return `${minutes}:${seconds}`;
+        };
+        
+        currentEl.textContent = formatTime(event.position);
+        totalEl.textContent = formatTime(event.duration);
+        
+        const progressPct = (event.position / event.duration) * 100;
+        barEl.style.width = `${progressPct}%`;
+    } else {
+        currentEl.textContent = "0:00";
+        totalEl.textContent = "0:00";
+        barEl.style.width = "0%";
+    }
+
     if (!currentSyncedLyrics.length) return;
     const position = event.position;
     
@@ -331,6 +358,24 @@ window.wallpaperPropertyListener = {
         }
         if (properties.overlay_size) {
             document.documentElement.style.setProperty('--overlay-scale', properties.overlay_size.value / 100);
+        }
+
+        // Weather
+        if (properties.show_weather) {
+            document.documentElement.style.setProperty('--weather-display', properties.show_weather.value ? 'flex' : 'none');
+        }
+        if (properties.weather_unit) {
+            weatherUnit = properties.weather_unit.value;
+            updateWeather();
+        }
+        if (properties.weather_x) {
+            document.documentElement.style.setProperty('--weather-x', properties.weather_x.value + '%');
+        }
+        if (properties.weather_y) {
+            document.documentElement.style.setProperty('--weather-y', properties.weather_y.value + '%');
+        }
+        if (properties.weather_size) {
+            document.documentElement.style.setProperty('--weather-scale', properties.weather_size.value / 100);
         }
     }
 };
@@ -626,3 +671,61 @@ window.currentBgEffect = 'topo';
     // Start connection
     connect();
 })();
+
+// ==========================================
+// Weather Logic (Open-Meteo)
+// ==========================================
+async function updateWeather() {
+    const latitude = 13.7911328;
+    const longitude = 100.5761852;
+    document.getElementById('weather-city').textContent = "Bangkok, Sutthisan";
+    
+    try {
+        // 2. Weather
+        const unit = weatherUnit === 'fahrenheit' ? '&temperature_unit=fahrenheit' : '';
+        const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true${unit}`);
+        const weatherData = await weatherRes.json();
+
+        if (weatherData.current_weather) {
+            const { temperature, weathercode } = weatherData.current_weather;
+            document.getElementById('weather-temp').textContent = `${Math.round(temperature)}°`;
+            
+            const condition = mapWeatherCode(weathercode);
+            document.getElementById('weather-desc').textContent = condition.desc;
+            document.getElementById('weather-icon-container').textContent = condition.icon;
+        }
+    } catch (e) {
+        document.getElementById('weather-city').textContent = "Weather Error";
+    }
+}
+
+function mapWeatherCode(code) {
+    const codes = {
+        0: { desc: "Clear sky", icon: "☀️" },
+        1: { desc: "Mainly clear", icon: "🌤️" },
+        2: { desc: "Partly cloudy", icon: "⛅" },
+        3: { desc: "Overcast", icon: "☁️" },
+        45: { desc: "Fog", icon: "🌫️" },
+        48: { desc: "Depositing rime fog", icon: "🌫️" },
+        51: { desc: "Drizzle: Light", icon: "🌦️" },
+        53: { desc: "Drizzle: Moderate", icon: "🌦️" },
+        55: { desc: "Drizzle: Dense", icon: "🌦️" },
+        61: { desc: "Rain: Slight", icon: "🌧️" },
+        63: { desc: "Rain: Moderate", icon: "🌧️" },
+        65: { desc: "Rain: Heavy", icon: "🌧️" },
+        71: { desc: "Snow fall: Slight", icon: "❄️" },
+        73: { desc: "Snow fall: Moderate", icon: "❄️" },
+        75: { desc: "Snow fall: Heavy", icon: "❄️" },
+        80: { desc: "Rain showers: Slight", icon: "🌦️" },
+        81: { desc: "Rain showers: Moderate", icon: "🌦️" },
+        82: { desc: "Rain showers: Violent", icon: "🌧️" },
+        95: { desc: "Thunderstorm: Slight or moderate", icon: "⛈️" },
+        96: { desc: "Thunderstorm with slight hail", icon: "⛈️" },
+        99: { desc: "Thunderstorm with heavy hail", icon: "⛈️" }
+    };
+    return codes[code] || { desc: "Unknown", icon: "🌡️" };
+}
+
+// Update weather every 30 minutes
+setInterval(updateWeather, 30 * 60 * 1000);
+updateWeather();
