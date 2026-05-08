@@ -80,22 +80,32 @@
         <!-- Hardware Stats Section -->
         <div class="stats-section glass-card" id="stats-section">
             <div class="stat-row">
-                <div class="stat-item">
-                    <span class="stat-label">Ryzen 5 9600x</span>
-                    <span class="stat-value" id="cpu-usage">--%</span>
-                    <span class="stat-temp" id="cpu-temp">--°C</span>
+                <div class="stat-item circle-item">
+                    <svg class="circle-chart" viewBox="0 0 100 100">
+                        <circle class="circle-bg" cx="50" cy="50" r="42"></circle>
+                        <circle class="circle-progress" id="cpu-circle" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="264"></circle>
+                    </svg>
+                    <div class="circle-content">
+                        <span class="stat-label">Ryzen 5 9600X</span>
+                        <span class="stat-value" id="cpu-usage">--%</span>
+                        <span class="stat-temp" id="cpu-temp">--°C</span>
+                    </div>
                 </div>
                 <div class="stat-divider"></div>
-                <div class="stat-item">
-                    <div class="gpu-fan-container">
-                        <img src="assets/gpu_fan.png" id="gpu-fan" class="gpu-fan">
+                <div class="stat-item circle-item">
+                    <svg class="circle-chart" viewBox="0 0 100 100">
+                        <circle class="circle-bg" cx="50" cy="50" r="42"></circle>
+                        <circle class="circle-progress" id="gpu-circle" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="264"></circle>
+                    </svg>
+                    <div class="circle-content">
+                        <span class="stat-label">RTX 5070</span>
+                        <span class="stat-value" id="gpu-usage">--%</span>
+                        <span class="stat-temp" id="gpu-temp">--°C</span>
+                        <div class="gpu-fan-container" style="display: none; position: absolute;">
+                            <img src="assets/gpu_fan.png" id="gpu-fan" class="gpu-fan">
+                        </div>
                     </div>
-                    <span class="stat-label">RTX 5070</span>
-                    <span class="stat-value" id="gpu-usage">--%</span>
-                    <span class="stat-temp" id="gpu-temp">--°C</span>
                 </div>
-            </div>
-            <div class="stat-status" id="hw-status">Connecting...</div>
         </div>
 
         <!-- Bottom spacer -->

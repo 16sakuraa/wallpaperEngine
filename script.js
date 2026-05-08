@@ -249,6 +249,15 @@ window.wallpaperPropertyListener = {
             document.documentElement.style.setProperty('--effect-color-rgb', `${r}, ${g}, ${b}`);
         }
 
+        // Circle Color
+        if (properties.circle_color) {
+            const colorParts = properties.circle_color.value.split(' ');
+            const r = Math.ceil(colorParts[0] * 255);
+            const g = Math.ceil(colorParts[1] * 255);
+            const b = Math.ceil(colorParts[2] * 255);
+            document.documentElement.style.setProperty('--circle-color', `rgb(${r}, ${g}, ${b})`);
+        }
+
         // Background Video
         if (properties.bgvideo) {
             const videoEl = document.getElementById('background-video');
@@ -598,7 +607,6 @@ window.currentBgEffect = 'topo';
     const cpuTempEl = document.getElementById('cpu-temp');
     const gpuUsageEl = document.getElementById('gpu-usage');
     const gpuTempEl = document.getElementById('gpu-temp');
-    const statusEl = document.getElementById('hw-status');
 
     const WS_URL = 'ws://localhost:3985';
     const RECONNECT_DELAY = 5000; // Try reconnecting every 5 seconds
@@ -609,9 +617,6 @@ window.currentBgEffect = 'topo';
     function connect() {
         if (ws && ws.readyState === WebSocket.OPEN) return;
 
-        statusEl.textContent = 'Connecting...';
-        statusEl.className = 'stat-status';
-
         try {
             ws = new WebSocket(WS_URL);
         } catch (e) {
@@ -620,23 +625,29 @@ window.currentBgEffect = 'topo';
         }
 
         ws.onopen = () => {
-            statusEl.textContent = 'Connected';
-            statusEl.className = 'stat-status connected';
-            // Hide status text after 3 seconds
-            setTimeout(() => {
-                if (statusEl.classList.contains('connected')) {
-                    statusEl.style.opacity = '0';
-                }
-            }, 3000);
+            // Silently connected
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                cpuUsageEl.textContent = data.cpu_usage + '%';
+                
+                const cpuUsage = data.cpu_usage || 0;
+                const gpuUsage = data.gpu_usage || 0;
+                
+                cpuUsageEl.textContent = cpuUsage + '%';
                 cpuTempEl.textContent = (data.cpu_temp > 0) ? data.cpu_temp + '°C' : '--°C';
-                gpuUsageEl.textContent = data.gpu_usage + '%';
+                gpuUsageEl.textContent = gpuUsage + '%';
                 gpuTempEl.textContent = (data.gpu_temp > 0) ? data.gpu_temp + '°C' : '--°C';
+
+                // Update circle progress bars
+                // circumference = 2 * Math.PI * 42 ≈ 263.89
+                const maxDash = 264;
+                const cpuOffset = maxDash - (cpuUsage / 100) * maxDash;
+                const gpuOffset = maxDash - (gpuUsage / 100) * maxDash;
+                
+                document.getElementById('cpu-circle').style.strokeDashoffset = cpuOffset;
+                document.getElementById('gpu-circle').style.strokeDashoffset = gpuOffset;
 
                 // Update GPU Fan Spin Speed
                 // Usage 0% -> 5s (slow), Usage 100% -> 0.2s (fast)
@@ -649,9 +660,6 @@ window.currentBgEffect = 'topo';
         };
 
         ws.onclose = () => {
-            statusEl.textContent = 'Disconnected';
-            statusEl.className = 'stat-status error';
-            statusEl.style.opacity = '1';
             scheduleReconnect();
         };
 

@@ -55,6 +55,11 @@
         "type": "color",
         "value": "0.23 0.70 0.78"
       },
+      "circle_color": {
+        "text": "Circle Bar Color",
+        "type": "color",
+        "value": "1 1 0"
+      },
       "overlayimage": {
         "text": "Overlay Image (PNG)",
         "type": "file",
