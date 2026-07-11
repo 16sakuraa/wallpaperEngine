@@ -1,3 +1,10 @@
+require('dotenv').config();
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const express = require('express');
+const axios = require('axios');
+const querystring = require('querystring');
 const WebSocket = require('ws');
 const si = require('systeminformation');
 const { execSync } = require('child_process');
@@ -15,7 +22,9 @@ let latestData = {
     cpu_usage: 0,
     cpu_temp: 0,
     gpu_usage: 0,
-    gpu_temp: 0
+    gpu_temp: 0,
+    spotify_next: null,
+    claude_usage: null
 };
 
 wss.on('connection', (ws) => {
@@ -102,6 +111,57 @@ function getNvidiaGpuData() {
 let cpuTempSource = 'unknown';
 
 /**
+ * Try LibreHardwareMonitor's built-in web server (Options → Remote Web Server → Run).
+ * Fetches http://localhost:8085/data.json and walks the sensor tree for the CPU temp.
+ * More reliable than WMI on newer LHM builds, which don't always register the namespace.
+ */
+function findLhmCpuTemp(node, underCpu) {
+    if (!node) return 0;
+    const isCpuNode = underCpu
+        || /cpu\.png/i.test(node.ImageURL || '')
+        || /ryzen|intel core|core i\d|xeon|threadripper/i.test(node.Text || '');
+
+    let best = 0;
+    let bestScore = -1;
+
+    const visit = (n, inCpu) => {
+        if (!n) return;
+        if (inCpu && typeof n.Value === 'string' && n.Value.includes('°C')) {
+            const temp = parseFloat(n.Value);
+            if (!isNaN(temp) && temp > 0 && temp < 150) {
+                // Prefer the canonical Ryzen/package sensors over individual cores
+                let score = 0;
+                if (/tctl\/tdie|tctl|tdie/i.test(n.Text || '')) score = 3;
+                else if (/package/i.test(n.Text || '')) score = 2;
+                else if (/core/i.test(n.Text || '')) score = 1;
+                if (score > bestScore || (score === bestScore && temp > best)) {
+                    bestScore = score;
+                    best = temp;
+                }
+            }
+        }
+        if (Array.isArray(n.Children)) {
+            const childInCpu = inCpu
+                || /cpu\.png/i.test(n.ImageURL || '')
+                || /ryzen|intel core|core i\d|xeon|threadripper/i.test(n.Text || '');
+            n.Children.forEach(c => visit(c, childInCpu));
+        }
+    };
+
+    visit(node, isCpuNode);
+    return Math.round(best);
+}
+
+async function getCpuTempLhmHttp() {
+    try {
+        const response = await axios.get('http://localhost:8085/data.json', { timeout: 2000 });
+        return findLhmCpuTemp(response.data, false);
+    } catch (e) {
+        return 0;
+    }
+}
+
+/**
  * Try LibreHardwareMonitor WMI namespace.
  * LHM must be running with "Remote Web Server" or WMI enabled.
  * This is the most reliable way to get AMD Ryzen CPU temps.
@@ -186,7 +246,19 @@ async function getCpuTemp() {
         } catch (e) { /* continue */ }
     }
 
-    // 2. LibreHardwareMonitor WMI
+    // 2. LibreHardwareMonitor web server (data.json)
+    if (cpuTempSource === 'unknown' || cpuTempSource === 'lhm-http') {
+        const httpTemp = await getCpuTempLhmHttp();
+        if (httpTemp > 0) {
+            if (cpuTempSource === 'unknown') {
+                cpuTempSource = 'lhm-http';
+                console.log('[HW Monitor] CPU temp source: LibreHardwareMonitor web server');
+            }
+            return httpTemp;
+        }
+    }
+
+    // 3. LibreHardwareMonitor WMI
     if (cpuTempSource === 'unknown' || cpuTempSource === 'lhm') {
         const lhmTemp = getCpuTempLHM();
         if (lhmTemp > 0) {
@@ -226,9 +298,9 @@ async function getCpuTemp() {
     if (cpuTempSource === 'unknown') {
         cpuTempSource = 'none';
         console.log('[HW Monitor] ⚠ No CPU temperature source available.');
-        console.log('[HW Monitor]   AMD Ryzen CPUs require LibreHardwareMonitor running in the background.');
-        console.log('[HW Monitor]   Download: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases');
-        console.log('[HW Monitor]   Run LHM as Administrator, then restart this server.');
+        console.log('[HW Monitor]   AMD Ryzen CPUs require LibreHardwareMonitor running as Administrator.');
+        console.log('[HW Monitor]   In LHM: Options → Remote Web Server → Run (port 8085).');
+        console.log('[HW Monitor]   This server retries automatically every 30 seconds.');
     }
 
     return 0;
@@ -281,3 +353,290 @@ process.on('SIGINT', () => {
     wss.close();
     process.exit(0);
 });
+
+// ==========================================
+// Spotify API Integration
+// ==========================================
+const spotifyApp = express();
+const SPOTIFY_PORT = 8888;
+let spotifyAccessToken = '';
+let spotifyTokenExpiry = 0;
+
+function updateEnvFile(key, value) {
+    try {
+        let envContent = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
+        const regex = new RegExp(`^${key}=.*`, 'm');
+        if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `${key}=${value}`);
+        } else {
+            envContent += `\n${key}=${value}`;
+        }
+        fs.writeFileSync('.env', envContent.trim());
+    } catch (e) {
+        console.error('[Spotify] Failed to update .env', e);
+    }
+}
+
+spotifyApp.get('/login', (req, res) => {
+    if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+        return res.send('Please configure SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env first.');
+    }
+    const scope = 'user-read-playback-state user-read-currently-playing';
+    res.redirect('https://accounts.spotify.com/authorize?' +
+        querystring.stringify({
+            response_type: 'code',
+            client_id: process.env.SPOTIFY_CLIENT_ID,
+            scope: scope,
+            redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
+        }));
+});
+
+spotifyApp.get('/callback', async (req, res) => {
+    const code = req.query.code || null;
+    if (!code) {
+        return res.send('No code provided');
+    }
+
+    try {
+        const response = await axios({
+            method: 'post',
+            url: 'https://accounts.spotify.com/api/token',
+            data: querystring.stringify({
+                code: code,
+                redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
+                grant_type: 'authorization_code'
+            }),
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded',
+                'Authorization': 'Basic ' + (Buffer.from(process.env.SPOTIFY_CLIENT_ID + ':' + process.env.SPOTIFY_CLIENT_SECRET).toString('base64'))
+            }
+        });
+
+        process.env.SPOTIFY_REFRESH_TOKEN = response.data.refresh_token;
+        updateEnvFile('SPOTIFY_REFRESH_TOKEN', response.data.refresh_token);
+        
+        spotifyAccessToken = response.data.access_token;
+        spotifyTokenExpiry = Date.now() + (response.data.expires_in * 1000);
+
+        res.send('Successfully authenticated with Spotify! You can close this window.');
+        
+        // Immediately fetch queue
+        fetchSpotifyNextSong();
+    } catch (error) {
+        res.send('Error authenticating with Spotify: ' + (error.response ? JSON.stringify(error.response.data) : error.message));
+    }
+});
+
+spotifyApp.listen(SPOTIFY_PORT, () => {
+    console.log(`[Spotify] Auth server running on http://127.0.0.1:${SPOTIFY_PORT}`);
+    if (!process.env.SPOTIFY_REFRESH_TOKEN) {
+        console.log(`[Spotify] PLEASE LOG IN: http://127.0.0.1:${SPOTIFY_PORT}/login`);
+    } else {
+        console.log(`[Spotify] Refresh token found, ready to fetch queue.`);
+        fetchSpotifyNextSong(); // Initial fetch
+    }
+});
+
+async function refreshSpotifyToken() {
+    if (!process.env.SPOTIFY_REFRESH_TOKEN || !process.env.SPOTIFY_CLIENT_ID) return false;
+    
+    try {
+        const response = await axios({
+            method: 'post',
+            url: 'https://accounts.spotify.com/api/token',
+            data: querystring.stringify({
+                grant_type: 'refresh_token',
+                refresh_token: process.env.SPOTIFY_REFRESH_TOKEN
+            }),
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded',
+                'Authorization': 'Basic ' + (Buffer.from(process.env.SPOTIFY_CLIENT_ID + ':' + process.env.SPOTIFY_CLIENT_SECRET).toString('base64'))
+            }
+        });
+
+        spotifyAccessToken = response.data.access_token;
+        spotifyTokenExpiry = Date.now() + (response.data.expires_in * 1000);
+        return true;
+    } catch (error) {
+        console.error('[Spotify] Error refreshing token:', error.response ? error.response.data : error.message);
+        return false;
+    }
+}
+
+async function fetchSpotifyNextSong() {
+    if (!process.env.SPOTIFY_REFRESH_TOKEN) return;
+
+    if (!spotifyAccessToken || Date.now() >= spotifyTokenExpiry - 60000) {
+        const refreshed = await refreshSpotifyToken();
+        if (!refreshed) return;
+    }
+
+    try {
+        const response = await axios({
+            method: 'get',
+            url: 'https://api.spotify.com/v1/me/player/queue',
+            headers: { 'Authorization': 'Bearer ' + spotifyAccessToken }
+        });
+
+        if (response.data && response.data.queue && response.data.queue.length > 0) {
+            const nextTrack = response.data.queue[0];
+            latestData.spotify_next = {
+                title: nextTrack.name,
+                artist: nextTrack.artists.map(a => a.name).join(', '),
+                art: nextTrack.album.images.length > 0 ? nextTrack.album.images[0].url : ''
+            };
+        } else {
+            latestData.spotify_next = null;
+        }
+    } catch (error) {
+        if (error.response && error.response.status !== 404 && error.response.status !== 204) {
+             console.error('[Spotify] Error fetching queue:', error.response.data);
+        }
+        latestData.spotify_next = null;
+    }
+}
+
+setInterval(fetchSpotifyNextSong, 5000); // Fetch queue every 5 seconds
+
+// ==========================================
+// Claude Code Usage (rate limit) Integration
+// ==========================================
+// Reads the Claude Code CLI OAuth token from ~/.claude/.credentials.json
+// (created by running `claude` in a terminal and logging in with /login),
+// then polls the same usage endpoint that Claude Code's /usage command uses.
+// A token can also be supplied directly via CLAUDE_OAUTH_TOKEN in .env.
+const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
+const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code public OAuth client
+const CLAUDE_POLL_INTERVAL_MS = 60000;
+
+let claudeNoTokenWarned = false;
+
+function readClaudeCredentials() {
+    try {
+        return JSON.parse(fs.readFileSync(CLAUDE_CREDS_PATH, 'utf8'));
+    } catch (e) {
+        return null;
+    }
+}
+
+async function refreshClaudeToken(creds) {
+    const oauth = creds && creds.claudeAiOauth;
+    if (!oauth || !oauth.refreshToken) return null;
+
+    try {
+        const response = await axios.post(CLAUDE_TOKEN_URL, {
+            grant_type: 'refresh_token',
+            refresh_token: oauth.refreshToken,
+            client_id: CLAUDE_CLIENT_ID
+        }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 });
+
+        const data = response.data;
+        creds.claudeAiOauth = {
+            ...oauth,
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token || oauth.refreshToken,
+            expiresAt: Date.now() + (data.expires_in * 1000)
+        };
+        // Write back so Claude Code keeps working with the rotated token
+        fs.writeFileSync(CLAUDE_CREDS_PATH, JSON.stringify(creds, null, 2));
+        console.log('[Claude] Refreshed OAuth token.');
+        return creds.claudeAiOauth.accessToken;
+    } catch (e) {
+        console.error('[Claude] Token refresh failed:', e.response ? e.response.status : e.message);
+        return null;
+    }
+}
+
+async function getClaudeToken() {
+    if (process.env.CLAUDE_OAUTH_TOKEN) return process.env.CLAUDE_OAUTH_TOKEN;
+
+    const creds = readClaudeCredentials();
+    const oauth = creds && creds.claudeAiOauth;
+    if (!oauth || !oauth.accessToken) {
+        if (!claudeNoTokenWarned) {
+            claudeNoTokenWarned = true;
+            console.log('[Claude] No OAuth token found.');
+            console.log('[Claude]   Run `claude` in a terminal and log in with /login,');
+            console.log('[Claude]   or set CLAUDE_OAUTH_TOKEN in .env.');
+        }
+        return null;
+    }
+
+    // Refresh if the token expires within 5 minutes
+    if (oauth.expiresAt && Date.now() >= oauth.expiresAt - 300000) {
+        const refreshed = await refreshClaudeToken(creds);
+        if (refreshed) return refreshed;
+        // Fall through — Claude Code itself may have refreshed the file since
+        const reread = readClaudeCredentials();
+        if (reread && reread.claudeAiOauth && reread.claudeAiOauth.expiresAt > Date.now()) {
+            return reread.claudeAiOauth.accessToken;
+        }
+        return null;
+    }
+
+    return oauth.accessToken;
+}
+
+function normalizeClaudeWindow(w) {
+    if (!w || typeof w.utilization !== 'number') return null;
+    return {
+        pct: Math.max(0, Math.min(100, Math.round(w.utilization))),
+        resets_at: w.resets_at || null
+    };
+}
+
+function normalizeClaudeLimit(l, label) {
+    if (!l || typeof l.percent !== 'number') return null;
+    return {
+        pct: Math.max(0, Math.min(100, Math.round(l.percent))),
+        resets_at: l.resets_at || null,
+        label: label || null
+    };
+}
+
+async function fetchClaudeUsage() {
+    const token = await getClaudeToken();
+    if (!token) {
+        latestData.claude_usage = { ok: false, error: 'no_token' };
+        return;
+    }
+
+    try {
+        const response = await axios.get(CLAUDE_USAGE_URL, {
+            headers: {
+                'Authorization': 'Bearer ' + token,
+                'anthropic-beta': 'oauth-2025-04-20',
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+
+        const d = response.data || {};
+
+        // Prefer the richer `limits` array (has per-model scoped limits);
+        // fall back to the flat five_hour/seven_day fields.
+        const limits = Array.isArray(d.limits) ? d.limits : [];
+        const sessionLimit = limits.find(l => l.kind === 'session');
+        const weeklyLimit = limits.find(l => l.kind === 'weekly_all');
+        const scopedLimit = limits.find(l => l.kind === 'weekly_scoped');
+        const scopedLabel = scopedLimit && scopedLimit.scope && scopedLimit.scope.model
+            ? scopedLimit.scope.model.display_name : null;
+
+        latestData.claude_usage = {
+            ok: true,
+            session: normalizeClaudeLimit(sessionLimit) || normalizeClaudeWindow(d.five_hour),
+            weekly: normalizeClaudeLimit(weeklyLimit) || normalizeClaudeWindow(d.seven_day),
+            weekly_scoped: normalizeClaudeLimit(scopedLimit, scopedLabel) || normalizeClaudeWindow(d.seven_day_opus),
+            updated_at: Date.now()
+        };
+    } catch (e) {
+        const status = e.response ? e.response.status : null;
+        console.error('[Claude] Usage fetch failed:', status || e.message);
+        latestData.claude_usage = { ok: false, error: status === 401 ? 'unauthorized' : 'fetch_failed' };
+    }
+}
+
+setInterval(fetchClaudeUsage, CLAUDE_POLL_INTERVAL_MS);
+fetchClaudeUsage();

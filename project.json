@@ -209,6 +209,32 @@
         "max": 100,
         "value": 90
       },
+      "show_next_song": {
+        "text": "Show Next Song",
+        "type": "bool",
+        "value": true
+      },
+      "next_song_x": {
+        "text": "Next Song — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "next_song_y": {
+        "text": "Next Song — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 85
+      },
+      "next_song_size": {
+        "text": "Next Song — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
+      },
       "show_weather": {
         "text": "Show Weather",
         "type": "bool",
@@ -239,6 +265,32 @@
       },
       "weather_size": {
         "text": "Weather — Size",
+        "type": "slider",
+        "min": 20,
+        "max": 200,
+        "value": 100
+      },
+      "show_claude": {
+        "text": "Show Claude Limits",
+        "type": "bool",
+        "value": true
+      },
+      "claude_x": {
+        "text": "Claude Limits — Horizontal Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 50
+      },
+      "claude_y": {
+        "text": "Claude Limits — Vertical Position",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 90
+      },
+      "claude_size": {
+        "text": "Claude Limits — Size",
         "type": "slider",
         "min": 20,
         "max": 200,

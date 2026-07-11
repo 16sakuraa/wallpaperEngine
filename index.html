@@ -77,6 +77,18 @@
             <div id="lyrics-content">Searching for lyrics...</div>
         </div>
 
+        <!-- Spotify Next Song Section -->
+        <div class="next-song-section glass-card" id="next-song-section">
+            <div class="next-song-header">UP NEXT</div>
+            <div class="next-song-content">
+                <img id="next-album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/></svg>" alt="Next Art">
+                <div class="next-track-info">
+                    <h3 id="next-track-title">Loading...</h3>
+                    <p id="next-track-artist">Waiting for queue</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Hardware Stats Section -->
         <div class="stats-section glass-card" id="stats-section">
             <div class="stat-row">
@@ -106,6 +118,43 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Claude Usage Section -->
+        <div class="claude-section glass-card" id="claude-section">
+            <div class="claude-header">CLAUDE LIMITS</div>
+            <div class="claude-bar-row">
+                <div class="claude-bar-top">
+                    <span class="claude-bar-label">Session (5h)</span>
+                    <span class="claude-bar-value" id="claude-session-pct">--%</span>
+                </div>
+                <div class="claude-bar-wrapper">
+                    <div class="claude-bar-fill" id="claude-session-bar"></div>
+                </div>
+                <span class="claude-bar-reset" id="claude-session-reset">&nbsp;</span>
+            </div>
+            <div class="claude-bar-row">
+                <div class="claude-bar-top">
+                    <span class="claude-bar-label">Weekly</span>
+                    <span class="claude-bar-value" id="claude-weekly-pct">--%</span>
+                </div>
+                <div class="claude-bar-wrapper">
+                    <div class="claude-bar-fill" id="claude-weekly-bar"></div>
+                </div>
+                <span class="claude-bar-reset" id="claude-weekly-reset">&nbsp;</span>
+            </div>
+            <div class="claude-bar-row" id="claude-opus-row" style="display: none;">
+                <div class="claude-bar-top">
+                    <span class="claude-bar-label">Weekly (Opus)</span>
+                    <span class="claude-bar-value" id="claude-opus-pct">--%</span>
+                </div>
+                <div class="claude-bar-wrapper">
+                    <div class="claude-bar-fill" id="claude-opus-bar"></div>
+                </div>
+                <span class="claude-bar-reset" id="claude-opus-reset">&nbsp;</span>
+            </div>
+            <div class="claude-status" id="claude-status" style="display: none;"></div>
         </div>
 
         <!-- Bottom spacer -->

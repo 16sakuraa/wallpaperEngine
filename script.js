@@ -331,6 +331,34 @@ window.wallpaperPropertyListener = {
             document.documentElement.style.setProperty('--lyrics-width', properties.lyrics_size.value + '%');
         }
 
+        // Show/Hide Next Song
+        if (properties.show_next_song) {
+            document.documentElement.style.setProperty('--next-song-display', properties.show_next_song.value ? 'flex' : 'none');
+        }
+        if (properties.next_song_x) {
+            document.documentElement.style.setProperty('--next-song-x', properties.next_song_x.value + '%');
+        }
+        if (properties.next_song_y) {
+            document.documentElement.style.setProperty('--next-song-y', properties.next_song_y.value + '%');
+        }
+        if (properties.next_song_size) {
+            document.documentElement.style.setProperty('--next-song-scale', properties.next_song_size.value / 100);
+        }
+
+        // Show/Hide Claude Usage
+        if (properties.show_claude) {
+            document.documentElement.style.setProperty('--claude-display', properties.show_claude.value ? 'flex' : 'none');
+        }
+        if (properties.claude_x) {
+            document.documentElement.style.setProperty('--claude-x', properties.claude_x.value + '%');
+        }
+        if (properties.claude_y) {
+            document.documentElement.style.setProperty('--claude-y', properties.claude_y.value + '%');
+        }
+        if (properties.claude_size) {
+            document.documentElement.style.setProperty('--claude-scale', properties.claude_size.value / 100);
+        }
+
         // Drop Shadow
         if (properties.show_shadow || properties.shadow_blur || properties.shadow_opacity) {
             const show = (properties.show_shadow) ? properties.show_shadow.value : true;
@@ -600,6 +628,78 @@ window.currentBgEffect = 'topo';
 })();
 
 // ==========================================
+// Claude Usage Panel
+// ==========================================
+function formatClaudeReset(resetsAt) {
+    if (!resetsAt) return '';
+    const reset = new Date(resetsAt);
+    if (isNaN(reset.getTime())) return '';
+
+    const diffMs = reset.getTime() - Date.now();
+    if (diffMs <= 0) return 'resetting...';
+
+    // Within 24h: show clock time; further out: show weekday + time
+    const timeStr = reset.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (diffMs < 24 * 60 * 60 * 1000) {
+        return 'resets ' + timeStr;
+    }
+    const dayStr = reset.toLocaleDateString([], { weekday: 'short' });
+    return 'resets ' + dayStr + ' ' + timeStr;
+}
+
+function setClaudeBar(prefix, windowData) {
+    const pctEl = document.getElementById(`claude-${prefix}-pct`);
+    const barEl = document.getElementById(`claude-${prefix}-bar`);
+    const resetEl = document.getElementById(`claude-${prefix}-reset`);
+    if (!pctEl || !barEl || !resetEl) return;
+
+    if (!windowData) {
+        pctEl.textContent = '--%';
+        barEl.style.width = '0%';
+        resetEl.innerHTML = '&nbsp;';
+        return;
+    }
+
+    pctEl.textContent = windowData.pct + '%';
+    barEl.style.width = windowData.pct + '%';
+    barEl.classList.toggle('crit', windowData.pct >= 90);
+    barEl.classList.toggle('warn', windowData.pct >= 70 && windowData.pct < 90);
+    resetEl.textContent = formatClaudeReset(windowData.resets_at) || ' ';
+}
+
+function updateClaudeUsage(usage) {
+    const statusEl = document.getElementById('claude-status');
+    const opusRow = document.getElementById('claude-opus-row');
+    if (!statusEl) return;
+
+    if (!usage) return; // Server hasn't polled yet — keep placeholders
+
+    if (!usage.ok) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = usage.error === 'no_token'
+            ? 'Not connected — log in to Claude Code CLI'
+            : 'Usage unavailable';
+        return;
+    }
+
+    statusEl.style.display = 'none';
+    setClaudeBar('session', usage.session);
+    setClaudeBar('weekly', usage.weekly);
+
+    const scoped = usage.weekly_scoped || usage.weekly_opus;
+    if (scoped) {
+        opusRow.style.display = 'flex';
+        const labelEl = opusRow.querySelector('.claude-bar-label');
+        if (labelEl) {
+            labelEl.textContent = scoped.label ? 'Weekly (' + scoped.label + ')' : 'Weekly (Model)';
+        }
+        setClaudeBar('opus', scoped);
+    } else {
+        opusRow.style.display = 'none';
+    }
+}
+
+// ==========================================
 // Hardware Monitor WebSocket Client
 // ==========================================
 (function initHWMonitor() {
@@ -654,6 +754,24 @@ window.currentBgEffect = 'topo';
                 const usage = data.gpu_usage || 0;
                 const spinDuration = 5 - (usage / 100) * 4.8; 
                 document.documentElement.style.setProperty('--gpu-spin-speed', `${spinDuration.toFixed(2)}s`);
+
+                // Update Spotify Next Song
+                if (data.spotify_next) {
+                    document.getElementById('next-track-title').textContent = data.spotify_next.title;
+                    document.getElementById('next-track-artist').textContent = data.spotify_next.artist;
+                    if (data.spotify_next.art) {
+                        document.getElementById('next-album-art').src = data.spotify_next.art;
+                    } else {
+                        document.getElementById('next-album-art').src = "assets/default_art.jpg";
+                    }
+                } else {
+                    document.getElementById('next-track-title').textContent = "End of Queue";
+                    document.getElementById('next-track-artist').textContent = "No next song";
+                    document.getElementById('next-album-art').src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/></svg>";
+                }
+
+                // Update Claude Usage
+                updateClaudeUsage(data.claude_usage);
             } catch (e) {
                 // Ignore parse errors
             }

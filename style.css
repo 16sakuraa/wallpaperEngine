@@ -36,6 +36,12 @@
 
     --lyrics-display: flex;
 
+    /* Claude usage positioning & size (updated by JS from WE sliders) */
+    --claude-x: 50%;
+    --claude-y: 90%;
+    --claude-scale: 1;
+    --claude-display: flex;
+
     /* Weather positioning & size */
     --weather-x: 50%;
     --weather-y: 35%;
@@ -476,6 +482,167 @@ body {
     opacity: 1;
     transform: scale(1.1);
     font-weight: 700;
+}
+
+/* ==========================================
+   Spotify Next Song Section
+   ========================================== */
+.next-song-section {
+    position: absolute;
+    left: var(--next-song-x, 50%);
+    top: var(--next-song-y, 85%);
+    transform: translate(-50%, -50%) scale(var(--next-song-scale, 1));
+    display: var(--next-song-display, flex);
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 24px;
+    min-width: 280px;
+    width: 80%;
+    max-width: 380px;
+}
+
+.next-song-header {
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--text-color-sub);
+    text-transform: uppercase;
+    position: relative;
+    z-index: 2;
+}
+
+.next-song-content {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: relative;
+    z-index: 2;
+}
+
+.next-song-content img {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    object-fit: cover;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+.next-track-info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex: 1;
+}
+
+.next-track-info h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.next-track-info p {
+    margin: 4px 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-color-sub);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ==========================================
+   Claude Usage Section
+   ========================================== */
+.claude-section {
+    position: absolute;
+    left: var(--claude-x);
+    top: var(--claude-y);
+    transform: translate(-50%, -50%) scale(var(--claude-scale));
+    display: var(--claude-display);
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 24px;
+    min-width: 280px;
+    width: 80%;
+    max-width: 380px;
+}
+
+.claude-header {
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--text-color-sub);
+    text-transform: uppercase;
+    position: relative;
+    z-index: 2;
+}
+
+.claude-bar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: relative;
+    z-index: 2;
+}
+
+.claude-bar-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.claude-bar-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-color-sub);
+}
+
+.claude-bar-value {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.claude-bar-wrapper {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.claude-bar-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--effect-color);
+    transition: width 0.5s ease-out, background-color 0.5s ease-out;
+}
+
+.claude-bar-fill.warn {
+    background: rgb(230, 180, 60);
+}
+
+.claude-bar-fill.crit {
+    background: rgb(230, 80, 70);
+}
+
+.claude-bar-reset {
+    font-size: 0.65rem;
+    color: var(--text-color-sub);
+    align-self: flex-end;
+}
+
+.claude-status {
+    font-size: 0.75rem;
+    color: var(--text-color-sub);
+    position: relative;
+    z-index: 2;
 }
 
 /* ==========================================
