@@ -509,9 +509,11 @@ const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json'
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code public OAuth client
-const CLAUDE_POLL_INTERVAL_MS = 60000;
+const CLAUDE_POLL_INTERVAL_MS = 300000; // 5 min — the endpoint rate-limits aggressive polling
+const CLAUDE_STALE_MS = 3600000;        // keep showing last data for up to 1h through outages
 
 let claudeNoTokenWarned = false;
+let claudeBackoffUntil = 0;
 
 function readClaudeCredentials() {
     try {
@@ -596,10 +598,19 @@ function normalizeClaudeLimit(l, label) {
     };
 }
 
+function claudeHasFreshData() {
+    return latestData.claude_usage && latestData.claude_usage.ok
+        && (Date.now() - latestData.claude_usage.updated_at) < CLAUDE_STALE_MS;
+}
+
 async function fetchClaudeUsage() {
+    if (Date.now() < claudeBackoffUntil) return;
+
     const token = await getClaudeToken();
     if (!token) {
-        latestData.claude_usage = { ok: false, error: 'no_token' };
+        if (!claudeHasFreshData()) {
+            latestData.claude_usage = { ok: false, error: 'no_token' };
+        }
         return;
     }
 
@@ -634,7 +645,18 @@ async function fetchClaudeUsage() {
     } catch (e) {
         const status = e.response ? e.response.status : null;
         console.error('[Claude] Usage fetch failed:', status || e.message);
-        latestData.claude_usage = { ok: false, error: status === 401 ? 'unauthorized' : 'fetch_failed' };
+
+        if (status === 429) {
+            // Respect Retry-After if present, otherwise back off 15 minutes
+            const retryAfter = e.response && parseInt(e.response.headers['retry-after'], 10);
+            claudeBackoffUntil = Date.now() + (retryAfter > 0 ? retryAfter * 1000 : 900000);
+            console.error('[Claude] Rate limited — backing off until ' + new Date(claudeBackoffUntil).toLocaleTimeString());
+        }
+
+        // Only surface the error if we have no recent data to keep showing
+        if (!claudeHasFreshData()) {
+            latestData.claude_usage = { ok: false, error: status === 401 ? 'unauthorized' : 'fetch_failed' };
+        }
     }
 }
 
