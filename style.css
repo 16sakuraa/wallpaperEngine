@@ -13,6 +13,9 @@
     --clock-x: 50%;
     --clock-y: 20%;
     --clock-scale: 1;
+    --clock-weight: 200;
+    --clock-color: var(--text-color);
+    --clock-color-sub: var(--text-color-sub);
 
     /* Music positioning & size (updated by JS from WE sliders) */
     --music-x: 50%;
@@ -34,6 +37,10 @@
     --overlay-y: 85%;
     --overlay-scale: 0.5;
 
+    /* Lyrics positioning & width (updated by JS from WE sliders) */
+    --lyrics-x: 50%;
+    --lyrics-y: 65%;
+    --lyrics-width: 90%;
     --lyrics-display: flex;
 
     /* Claude usage positioning & size (updated by JS from WE sliders) */
@@ -216,7 +223,7 @@ body {
     font-weight: 300;
     letter-spacing: 2px;
     margin-top: 10px;
-    color: var(--text-color-sub);
+    color: var(--clock-color-sub);
     text-transform: uppercase;
 }
 
@@ -227,8 +234,8 @@ body {
 
 .time-layer {
     font-size: clamp(4rem, 12vw, 7rem);
-    font-weight: 900;
-    letter-spacing: -3px;
+    font-weight: var(--clock-weight);
+    letter-spacing: 0;
     display: block;
     user-select: none;
     line-height: 1;
@@ -241,7 +248,7 @@ body {
     left: 0;
     color: #ff0040;
     opacity: 0.6;
-    transform: translate(-3px, -2px);
+    transform: translate(-1.5px, -1px);
     mix-blend-mode: screen;
 }
 
@@ -251,7 +258,7 @@ body {
     left: 0;
     color: #00ff80;
     opacity: 0.5;
-    transform: translate(2px, 2px);
+    transform: translate(1px, 1px);
     mix-blend-mode: screen;
 }
 
@@ -261,13 +268,13 @@ body {
     left: 0;
     color: #4080ff;
     opacity: 0.6;
-    transform: translate(3px, -1px);
+    transform: translate(1.5px, -0.5px);
     mix-blend-mode: screen;
 }
 
 .time-main {
     position: relative;
-    color: var(--text-color);
+    color: var(--clock-color);
     text-shadow:
         0 0 30px rgba(255, 255, 255, 0.15),
         0 5px 20px rgba(0, 0, 0, 0.5);
@@ -482,6 +489,11 @@ body {
     opacity: 1;
     transform: scale(1.1);
     font-weight: 700;
+}
+
+/* Plain (unsynced) lyrics arrive as one block — keep their line breaks */
+.lyric-line.plain {
+    white-space: pre-line;
 }
 
 /* ==========================================
@@ -722,13 +734,19 @@ body {
     font-size: 0.8rem;
 }
 
+/* Spinning fan centered behind the GPU readout (toggle: show_gpu_fan) */
 .gpu-fan-container {
-    width: 40px;
-    height: 40px;
-    margin-bottom: 5px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 64px;
+    height: 64px;
+    margin: -32px 0 0 -32px;
     display: var(--gpu-fan-display);
     align-items: center;
     justify-content: center;
+    z-index: -1;
+    pointer-events: none;
 }
 
 .gpu-fan {

@@ -1,24 +1,24 @@
 // ==========================================
 // Clock Logic (24-hour format)
 // ==========================================
+// hourCycle 'h23' instead of hour12:false — older V8 resolves hour12:false to
+// h24 for en-US and shows midnight as "24:05".
+const timeFormat = new Intl.DateTimeFormat('en-US', { hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+const dateFormat = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: '2-digit' });
+const clockEls = ['time', 'time-red', 'time-green', 'time-blue'].map(id => document.getElementById(id));
+const dateEl = document.getElementById('date-text');
+
+// Write only when the text changes: the display changes once a minute, and
+// each write repaints the clock card and its blend-mode layers.
+function setText(el, text) {
+    if (el.textContent !== text) el.textContent = text;
+}
+
 function updateTime() {
-    const timeString = new Date().toLocaleTimeString('en-US', {
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-
-    document.getElementById('time').textContent = timeString;
-    document.getElementById('time-red').textContent = timeString;
-    document.getElementById('time-green').textContent = timeString;
-    document.getElementById('time-blue').textContent = timeString;
-
-    const dateString = new Date().toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: '2-digit'
-    });
-    document.getElementById('date-text').textContent = dateString;
+    const now = new Date();
+    const timeString = timeFormat.format(now);
+    clockEls.forEach(el => setText(el, timeString));
+    setText(dateEl, dateFormat.format(now));
 }
 
 setInterval(updateTime, 1000);
@@ -32,75 +32,245 @@ window.wallpaperRegisterMediaThumbnailListener = window.wallpaperRegisterMediaTh
 window.wallpaperRegisterMediaTimelineListener = window.wallpaperRegisterMediaTimelineListener || function() {};
 
 let currentSyncedLyrics = [];
+let lyricLineEls = [];        // rendered synced-lyric line elements, same order as currentSyncedLyrics
+let activeLyricIndex = -1;
+let lyricsRequestId = 0;      // bumped per track so late responses for an old track are dropped
+let currentTrackKey = '';
 let weatherUnit = "celsius";
 
+// Only the properties event carries contentType; the thumbnail and timeline
+// events don't, so they follow this flag to ignore non-music sessions too.
+let mediaIsMusic = true;
+
 window.wallpaperRegisterMediaPropertiesListener((event) => {
+    // Only react to music sessions (Spotify, Apple Music, etc.). Browser/video
+    // media reports contentType 'video'/'image' — ignore it and leave the
+    // current track untouched. Sessions that omit contentType still pass.
+    mediaIsMusic = !(event && event.contentType && event.contentType !== 'music');
+    if (!mediaIsMusic) return;
+
     const titleEl = document.getElementById('track-title');
     const artistEl = document.getElementById('track-artist');
-    const lyricsEl = document.getElementById('lyrics-content');
 
     if (event && event.title) {
-        const oldTitle = titleEl.textContent;
         titleEl.textContent = event.title;
         artistEl.textContent = event.artist || "Unknown Artist";
 
-        if (event.title !== oldTitle) {
+        // Key on title + artist so covers / same-named songs still refetch.
+        const trackKey = event.title + '\n' + (event.artist || '');
+        if (trackKey !== currentTrackKey) {
+            currentTrackKey = trackKey;
             fetchLyrics(event.title, event.artist);
         }
     } else {
+        currentTrackKey = '';
+        lyricsRequestId++; // drop any lyrics request still in flight
         titleEl.textContent = "No Track Playing";
         artistEl.textContent = "Waiting for media...";
-        lyricsEl.innerHTML = "";
-        currentSyncedLyrics = [];
+        showLyricsMessage('');
         document.getElementById('time-current').textContent = "0:00";
         document.getElementById('time-total').textContent = "0:00";
         document.getElementById('progress-bar').style.width = "0%";
     }
 });
 
-async function fetchLyrics(title, artist) {
-    const lyricsEl = document.getElementById('lyrics-content');
-    lyricsEl.innerHTML = '<div class="lyric-line active">Searching...</div>';
-    currentSyncedLyrics = [];
-    
-    try {
-        const cleanTitle = title.split('(')[0].split('-')[0].trim();
-        const cleanArtist = (artist || "").split(',')[0].split('feat')[0].trim();
+// --- Lyrics cache (localStorage-backed, held in memory) ---
+const LYRICS_CACHE_KEY = 'lyricsCache';
+const LYRICS_CACHE_BUDGET = 4 * 1024 * 1024;      // ~4MB, under CEF's ~5MB localStorage limit
+const LYRICS_NEG_TTL = 7 * 24 * 60 * 60 * 1000;   // retry "not found" after 7 days
+const LYRICS_SAVE_DELAY = 2000;
 
-        const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(cleanArtist)}&track_name=${encodeURIComponent(cleanTitle)}`);
-        
-        if (response.ok) {
-            const data = await response.json();
-            
-            if (data.syncedLyrics) {
-                currentSyncedLyrics = data.syncedLyrics.split('\n').map(line => {
-                    const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
-                    if (match) {
-                        const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
-                        return { time, text: match[3].trim() };
-                    }
-                    return null;
-                }).filter(l => l && l.text);
-                renderLyrics(currentSyncedLyrics);
-            } else if (data.plainLyrics) {
-                lyricsEl.innerHTML = `<div class="lyric-line active">${data.plainLyrics}</div>`;
-            } else {
-                lyricsEl.innerHTML = '<div class="lyric-line">No lyrics found.</div>';
-            }
+// Parsed once on first use and kept in memory; saves are debounced so a track
+// change doesn't re-parse and re-serialize the whole (up to 4MB) blob.
+let lyricsCache = null;
+let lyricsSaveTimer = null;
+
+function lyricsCacheKey(artist, title) {
+    return (artist + '|' + title).toLowerCase();
+}
+
+function loadLyricsCache() {
+    try {
+        return JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY)) || {};
+    } catch (e) {
+        return {};
+    }
+}
+
+// Returns the cache that was actually persisted (old entries may be evicted).
+function saveLyricsCache(cache) {
+    let payload = JSON.stringify(cache);
+    // UTF-16 strings are ~2 bytes/char. If over budget, drop the oldest third.
+    if (payload.length * 2 > LYRICS_CACHE_BUDGET) {
+        const entries = Object.entries(cache).sort((a, b) => a[1].at - b[1].at);
+        cache = Object.fromEntries(entries.slice(Math.floor(entries.length / 3)));
+        payload = JSON.stringify(cache);
+    }
+    try {
+        localStorage.setItem(LYRICS_CACHE_KEY, payload);
+    } catch (e) {
+        // QuotaExceeded backstop: keep only the newest half and retry once.
+        const entries = Object.entries(cache).sort((a, b) => a[1].at - b[1].at);
+        cache = Object.fromEntries(entries.slice(Math.floor(entries.length / 2)));
+        try { localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(cache)); } catch (e2) {}
+    }
+    return cache;
+}
+
+function getLyricsCache() {
+    if (!lyricsCache) lyricsCache = loadLyricsCache();
+    return lyricsCache;
+}
+
+function scheduleLyricsCacheSave() {
+    if (lyricsSaveTimer) return;
+    lyricsSaveTimer = setTimeout(() => {
+        lyricsSaveTimer = null;
+        lyricsCache = saveLyricsCache(lyricsCache);
+    }, LYRICS_SAVE_DELAY);
+}
+
+function getCachedLyrics(key) {
+    const entry = getLyricsCache()[key];
+    if (!entry) return null;
+    if (entry.none && Date.now() - entry.at > LYRICS_NEG_TTL) return null; // expired negative → refetch
+    // Refresh recency for LRU in memory only; it's persisted with the next new entry.
+    entry.at = Date.now();
+    return entry;
+}
+
+function setCachedLyrics(key, entry) {
+    entry.at = Date.now();
+    getLyricsCache()[key] = entry;
+    scheduleLyricsCacheSave();
+}
+
+function parseSyncedLyrics(raw) {
+    return raw.split('\n').map(line => {
+        const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
+        if (match) {
+            const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
+            return { time, text: match[3].trim() };
+        }
+        return null;
+    }).filter(l => l && l.text);
+}
+
+// "Song (feat. X)", "Song [Live]", "Song - Remastered 2011" → "Song", while
+// hyphenated titles like "Anti-Hero" stay intact.
+function cleanTrackTitle(title) {
+    const cleaned = title.replace(/\s*[(\[].*$/, '').replace(/\s+[-–—]\s+.*$/, '').trim();
+    return cleaned || title.trim();
+}
+
+// Primary artist: cut at a comma or a standalone "feat."/"ft." ("Defeater" stays whole).
+function primaryArtist(artist) {
+    return artist.split(',')[0].split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim();
+}
+
+// Shows one non-synced block (status text or plain lyrics). Uses textContent:
+// lrclib is crowd-sourced, so lyrics are untrusted text, never HTML.
+function showLyricsMessage(text, active = false, plain = false) {
+    const lyricsEl = document.getElementById('lyrics-content');
+    currentSyncedLyrics = [];
+    lyricLineEls = [];
+    activeLyricIndex = -1;
+    if (!text) {
+        lyricsEl.replaceChildren();
+        return;
+    }
+    const div = document.createElement('div');
+    div.className = 'lyric-line' + (active ? ' active' : '') + (plain ? ' plain' : '');
+    div.textContent = text;
+    lyricsEl.replaceChildren(div);
+}
+
+function applyLyrics(data) {
+    if (data.syncedLyrics) {
+        currentSyncedLyrics = parseSyncedLyrics(data.syncedLyrics);
+        renderLyrics(currentSyncedLyrics);
+    } else if (data.plainLyrics) {
+        showLyricsMessage(data.plainLyrics, true, true);
+    } else {
+        showLyricsMessage('No lyrics found.');
+    }
+}
+
+async function fetchLyrics(title, artist) {
+    const requestId = ++lyricsRequestId;
+    currentSyncedLyrics = [];
+
+    const cleanTitle = cleanTrackTitle(title);
+    const fullArtist = (artist || "").trim();
+    const cleanArtist = primaryArtist(fullArtist);
+    const key = lyricsCacheKey(cleanArtist, cleanTitle);
+
+    // Cache hit — apply instantly, no network call.
+    const cached = getCachedLyrics(key);
+    if (cached) {
+        if (cached.none) {
+            showLyricsMessage('No lyrics found.');
         } else {
-            lyricsEl.innerHTML = '<div class="lyric-line">No lyrics found.</div>';
+            applyLyrics(cached);
+        }
+        return;
+    }
+
+    showLyricsMessage('Searching...', true);
+
+    // Primary artist first; a name that contains a comma ("Tyler, The Creator")
+    // gets a second try with the full artist string.
+    const artistCandidates = cleanArtist === fullArtist ? [cleanArtist] : [cleanArtist, fullArtist];
+
+    try {
+        let result = 'miss'; // 'found' | 'miss' (definitive, cacheable) | 'error' (transient)
+        let data = null;
+        for (const candidate of artistCandidates) {
+            const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(candidate)}&track_name=${encodeURIComponent(cleanTitle)}`);
+            if (requestId !== lyricsRequestId) return; // track changed while waiting
+            if (response.status === 404) continue;      // not in lrclib under this artist name
+            if (!response.ok) {
+                result = 'error';
+                break;
+            }
+            data = await response.json();
+            if (requestId !== lyricsRequestId) return;
+            result = (data.syncedLyrics || data.plainLyrics) ? 'found' : 'miss';
+            break;
+        }
+
+        if (result === 'found') {
+            const entry = { syncedLyrics: data.syncedLyrics || null, plainLyrics: data.plainLyrics || null };
+            setCachedLyrics(key, entry);
+            applyLyrics(entry);
+        } else {
+            // Cache definitive misses so replays don't re-hit the API; a transient
+            // server error leaves the cache alone.
+            if (result === 'miss') setCachedLyrics(key, { none: true });
+            showLyricsMessage('No lyrics found.');
         }
     } catch (e) {
-        lyricsEl.innerHTML = "";
+        // Network failure — leave cache untouched so it retries next time.
+        if (requestId === lyricsRequestId) showLyricsMessage('');
     }
 }
 
 function renderLyrics(lyrics) {
     const lyricsEl = document.getElementById('lyrics-content');
-    lyricsEl.innerHTML = lyrics.map((l, i) => `<div class="lyric-line" id="lyric-${i}">${l.text}</div>`).join('');
+    lyricLineEls = lyrics.map(l => {
+        const div = document.createElement('div');
+        div.className = 'lyric-line';
+        div.textContent = l.text;
+        return div;
+    });
+    activeLyricIndex = -1;
+    lyricsEl.replaceChildren(...lyricLineEls);
+    document.getElementById('lyrics-section').scrollTop = 0;
 }
 
 window.wallpaperRegisterMediaTimelineListener((event) => {
+    if (!mediaIsMusic) return;
+
     // Update Progress Bar
     const currentEl = document.getElementById('time-current');
     const totalEl = document.getElementById('time-total');
@@ -113,21 +283,22 @@ window.wallpaperRegisterMediaTimelineListener((event) => {
             return `${minutes}:${seconds}`;
         };
         
-        currentEl.textContent = formatTime(event.position);
-        totalEl.textContent = formatTime(event.duration);
-        
+        setText(currentEl, formatTime(event.position));
+        setText(totalEl, formatTime(event.duration));
+
         const progressPct = (event.position / event.duration) * 100;
         barEl.style.width = `${progressPct}%`;
     } else {
-        currentEl.textContent = "0:00";
-        totalEl.textContent = "0:00";
+        setText(currentEl, "0:00");
+        setText(totalEl, "0:00");
         barEl.style.width = "0%";
     }
 
-    if (!currentSyncedLyrics.length) return;
+    if (!event || !currentSyncedLyrics.length) return;
     const position = event.position;
-    
-    let activeIndex = 0;
+
+    // Last line whose timestamp has passed; -1 before the first line starts.
+    let activeIndex = -1;
     for (let i = 0; i < currentSyncedLyrics.length; i++) {
         if (position >= currentSyncedLyrics[i].time) {
             activeIndex = i;
@@ -135,39 +306,37 @@ window.wallpaperRegisterMediaTimelineListener((event) => {
             break;
         }
     }
+    if (activeIndex === activeLyricIndex) return;
 
-    const lines = document.querySelectorAll('.lyric-line');
+    if (activeLyricIndex >= 0) lyricLineEls[activeLyricIndex].classList.remove('active');
+    activeLyricIndex = activeIndex;
+    if (activeIndex < 0) return;
+
+    const line = lyricLineEls[activeIndex];
     const container = document.getElementById('lyrics-section');
-    
-    lines.forEach((line, i) => {
-        if (i === activeIndex) {
-            if (!line.classList.contains('active')) {
-                line.classList.add('active');
-                const offset = line.offsetTop - (container.offsetHeight / 2) + (line.offsetHeight / 2);
-                container.scrollTo({ top: offset, behavior: 'smooth' });
-            }
-        } else {
-            line.classList.remove('active');
-        }
-    });
+    line.classList.add('active');
+    const offset = line.offsetTop - (container.offsetHeight / 2) + (line.offsetHeight / 2);
+    container.scrollTo({ top: offset, behavior: 'smooth' });
 });
 
-window.wallpaperRegisterMediaThumbnailListener((event) => {
-    const imgElement = document.getElementById('album-art');
+let albumArtSrc = '';
+let albumArtToken = 0;
 
-    if (event && event.thumbnail) {
-        imgElement.style.opacity = 0;
-        setTimeout(() => {
-            imgElement.src = event.thumbnail;
-            imgElement.style.opacity = 1;
-        }, 200);
-    } else {
-        imgElement.style.opacity = 0;
-        setTimeout(() => {
-            imgElement.src = "assets/default_art.jpg";
-            imgElement.style.opacity = 1;
-        }, 200);
-    }
+window.wallpaperRegisterMediaThumbnailListener((event) => {
+    if (!mediaIsMusic) return;
+
+    const imgElement = document.getElementById('album-art');
+    const src = (event && event.thumbnail) ? event.thumbnail : "assets/default_art.jpg";
+    if (src === albumArtSrc) return; // same artwork re-sent (e.g. pause/resume) — skip the fade and re-decode
+    albumArtSrc = src;
+
+    const token = ++albumArtToken;
+    imgElement.style.opacity = 0;
+    setTimeout(() => {
+        if (token !== albumArtToken) return; // a newer thumbnail arrived during the fade
+        imgElement.src = src;
+        imgElement.style.opacity = 1;
+    }, 200);
 });
 
 // ==========================================
@@ -175,9 +344,19 @@ window.wallpaperRegisterMediaThumbnailListener((event) => {
 // ==========================================
 const bgLayer = document.getElementById('background-layer');
 
-let bgOffsetX = parseFloat(localStorage.getItem('we_bgOffsetX')) || 50;
-let bgOffsetY = parseFloat(localStorage.getItem('we_bgOffsetY')) || 50;
+// A dragged position is saved per axis. WE re-sends bg_x/bg_y with the first
+// property batch on load, so that batch keeps a saved drag; moving a slider
+// later replaces it.
+function loadBgOffset(key) {
+    const value = parseFloat(localStorage.getItem(key));
+    return Number.isFinite(value) ? value : null;
+}
+const savedBgOffsetX = loadBgOffset('we_bgOffsetX');
+const savedBgOffsetY = loadBgOffset('we_bgOffsetY');
+let bgOffsetX = savedBgOffsetX ?? 50;
+let bgOffsetY = savedBgOffsetY ?? 50;
 let bgScale = 100;
+let userPropertiesApplied = false;
 
 function updateBackgroundStyle() {
     bgLayer.style.backgroundPosition = `${bgOffsetX}% ${bgOffsetY}%`;
@@ -186,11 +365,43 @@ function updateBackgroundStyle() {
 
 updateBackgroundStyle();
 
+// Clock custom color state — when disabled, the clock falls back to the
+// universal text color through the CSS var defaults
+let clockUseCustomColor = false;
+let clockCustomColor = 'rgb(255, 255, 255)';
+let clockCustomColorSub = 'rgba(255, 255, 255, 0.7)';
+
+function applyClockColor() {
+    if (clockUseCustomColor) {
+        document.documentElement.style.setProperty('--clock-color', clockCustomColor);
+        document.documentElement.style.setProperty('--clock-color-sub', clockCustomColorSub);
+    } else {
+        document.documentElement.style.setProperty('--clock-color', 'var(--text-color)');
+        document.documentElement.style.setProperty('--clock-color-sub', 'var(--text-color-sub)');
+    }
+}
+
 // ==========================================
 // Wallpaper Engine Property Listener
 // ==========================================
+// Drop shadow state — WE sends only the changed property, so keep all three
+let shadowShow = true;
+let shadowBlur = 4;
+let shadowOpacity = 50;
+
 window.wallpaperPropertyListener = {
+    // WE's FPS limit isn't applied to requestAnimationFrame for web wallpapers;
+    // the background effects loop enforces it.
+    applyGeneralProperties: function(properties) {
+        if (properties.fps) {
+            bgEffects.setFps(properties.fps);
+        }
+    },
+
     applyUserProperties: function(properties) {
+        const firstApply = !userPropertiesApplied;
+        userPropertiesApplied = true;
+
         // Background Image
         if (properties.bgimage) {
             if (properties.bgimage.value) {
@@ -207,13 +418,15 @@ window.wallpaperPropertyListener = {
             updateBackgroundStyle();
         }
 
-        // Background Position
-        if (properties.bg_x) {
+        // Background Position (a saved drag wins over the load-time values)
+        if (properties.bg_x && !(firstApply && savedBgOffsetX !== null)) {
             bgOffsetX = properties.bg_x.value;
+            if (!firstApply) localStorage.removeItem('we_bgOffsetX');
             updateBackgroundStyle();
         }
-        if (properties.bg_y) {
+        if (properties.bg_y && !(firstApply && savedBgOffsetY !== null)) {
             bgOffsetY = properties.bg_y.value;
+            if (!firstApply) localStorage.removeItem('we_bgOffsetY');
             updateBackgroundStyle();
         }
 
@@ -247,6 +460,7 @@ window.wallpaperPropertyListener = {
             const b = Math.ceil(colorParts[2] * 255);
             document.documentElement.style.setProperty('--effect-color', `rgb(${r}, ${g}, ${b})`);
             document.documentElement.style.setProperty('--effect-color-rgb', `${r}, ${g}, ${b}`);
+            bgEffects.setColor(`${r}, ${g}, ${b}`);
         }
 
         // Circle Color
@@ -283,6 +497,26 @@ window.wallpaperPropertyListener = {
         }
         if (properties.clock_size) {
             document.documentElement.style.setProperty('--clock-scale', properties.clock_size.value / 100);
+        }
+
+        // Clock Font Weight
+        if (properties.clock_weight) {
+            document.documentElement.style.setProperty('--clock-weight', properties.clock_weight.value);
+        }
+
+        // Clock Custom Color
+        if (properties.clock_use_custom_color) {
+            clockUseCustomColor = properties.clock_use_custom_color.value;
+            applyClockColor();
+        }
+        if (properties.clock_color) {
+            const colorParts = properties.clock_color.value.split(' ');
+            const r = Math.ceil(colorParts[0] * 255);
+            const g = Math.ceil(colorParts[1] * 255);
+            const b = Math.ceil(colorParts[2] * 255);
+            clockCustomColor = `rgb(${r}, ${g}, ${b})`;
+            clockCustomColorSub = `rgba(${r}, ${g}, ${b}, 0.7)`;
+            applyClockColor();
         }
 
         // Music Player Position & Size
@@ -361,12 +595,12 @@ window.wallpaperPropertyListener = {
 
         // Drop Shadow
         if (properties.show_shadow || properties.shadow_blur || properties.shadow_opacity) {
-            const show = (properties.show_shadow) ? properties.show_shadow.value : true;
-            const blur = (properties.shadow_blur) ? properties.shadow_blur.value : 4;
-            const opacity = (properties.shadow_opacity) ? properties.shadow_opacity.value : 50;
-            
-            if (show) {
-                const shadowStr = `0 ${blur/2}px ${blur}px rgba(0, 0, 0, ${opacity / 100})`;
+            if (properties.show_shadow) shadowShow = properties.show_shadow.value;
+            if (properties.shadow_blur) shadowBlur = properties.shadow_blur.value;
+            if (properties.shadow_opacity) shadowOpacity = properties.shadow_opacity.value;
+
+            if (shadowShow) {
+                const shadowStr = `0 ${shadowBlur/2}px ${shadowBlur}px rgba(0, 0, 0, ${shadowOpacity / 100})`;
                 document.documentElement.style.setProperty('--text-shadow', shadowStr);
             } else {
                 document.documentElement.style.setProperty('--text-shadow', 'none');
@@ -375,7 +609,7 @@ window.wallpaperPropertyListener = {
 
         // Background Effect
         if (properties.bg_effect) {
-            window.currentBgEffect = properties.bg_effect.value;
+            bgEffects.setEffect(properties.bg_effect.value);
         }
 
         // Overlay Image
@@ -401,7 +635,9 @@ window.wallpaperPropertyListener = {
         if (properties.show_weather) {
             document.documentElement.style.setProperty('--weather-display', properties.show_weather.value ? 'flex' : 'none');
         }
-        if (properties.weather_unit) {
+        // Refetch only when the unit actually changes; the startup fetch already
+        // covers the default, so the load-time batch doesn't double-fetch.
+        if (properties.weather_unit && properties.weather_unit.value !== weatherUnit) {
             weatherUnit = properties.weather_unit.value;
             updateWeather();
         }
@@ -458,16 +694,40 @@ window.addEventListener('mousemove', (e) => {
 // ==========================================
 // Background Effects Engine (Topo, Grid, Glitch)
 // ==========================================
-window.currentBgEffect = 'topo';
-
-(function initBackgroundEffects() {
+// The loop only runs while an effect is active: an idle loop that clears the
+// full-screen canvas every frame still forces Chromium to recomposite the page
+// (and re-blur every glass card) at the display's refresh rate.
+const bgEffects = (function initBackgroundEffects() {
     const canvas = document.getElementById('topo-canvas');
     const ctx = canvas.getContext('2d');
+
+    // Animation speeds in units per second (the old per-frame steps at 60 fps),
+    // so speed no longer depends on refresh rate or the FPS limit.
+    const TOPO_SPEED = 0.48;
+    const GRID_SPEED = 1.2;
+    const TOPO_STEP = 8;
+
+    let effect = 'topo';
+    let colorRGB = '60, 180, 200'; // matches --effect-color-rgb in style.css
+    let fps = 30;                  // replaced by WE's limit via applyGeneralProperties
     let time = 0;
+    let rafId = 0;
+    let lastTick = 0;              // previous requestAnimationFrame timestamp
+    let lastDraw = 0;              // timestamp of the last drawn frame
+    let frameBudget = 0;           // seconds accumulated toward the next drawn frame
+
+    // Topo noise field, sampled once per grid vertex per frame and shared by
+    // every contour level (it used to be re-evaluated ~30x per vertex).
+    let fieldCols = 0;
+    let fieldRows = 0;
+    let field = new Float64Array(0);
 
     function resize() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
+        fieldCols = Math.ceil(canvas.width / TOPO_STEP) + 1;
+        fieldRows = Math.ceil(canvas.height / TOPO_STEP) + 1;
+        field = new Float64Array(fieldCols * fieldRows);
     }
 
     window.addEventListener('resize', resize);
@@ -483,15 +743,20 @@ window.currentBgEffect = 'topo';
         );
     }
 
-    function drawTopo() {
-        time += 0.008;
+    function drawTopo(dt) {
+        time += dt * TOPO_SPEED;
         const w = canvas.width;
         const h = canvas.height;
-        const step = 8; 
+        const step = TOPO_STEP;
         const levels = 10;
         const levelSpacing = 1.7 / levels;
+        const cols = fieldCols;
 
-        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
+        for (let r = 0; r < fieldRows; r++) {
+            for (let c = 0; c < cols; c++) {
+                field[r * cols + c] = noise(c * step, r * step, time);
+            }
+        }
 
         ctx.lineWidth = 1;
         for (let level = 0; level < levels; level++) {
@@ -499,13 +764,14 @@ window.currentBgEffect = 'topo';
             const alpha = 0.1 + (level % 3) * 0.05;
             ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
             ctx.beginPath();
-            let drawing = false;
 
-            for (let y = 0; y < h; y += step) {
-                for (let x = 0; x < w; x += step) {
-                    const val = noise(x, y, time);
-                    const valRight = noise(x + step, y, time);
-                    const valDown = noise(x, y + step, time);
+            for (let r = 0, y = 0; y < h; r++, y += step) {
+                let drawing = false;
+                const row = r * cols;
+                for (let c = 0, x = 0; x < w; c++, x += step) {
+                    const val = field[row + c];
+                    const valRight = field[row + c + 1];
+                    const valDown = field[row + cols + c];
 
                     if ((val - threshold) * (valRight - threshold) < 0) {
                         const t_interp = (threshold - val) / (valRight - val);
@@ -518,24 +784,20 @@ window.currentBgEffect = 'topo';
                         if (!drawing) { ctx.moveTo(x, cy); drawing = true; } else { ctx.lineTo(x, cy); }
                     }
                 }
-                drawing = false;
             }
             ctx.stroke();
         }
     }
 
     // --- Synthwave Grid Logic ---
-    function drawGrid() {
-        time += 0.02;
+    function drawGrid(dt) {
+        time += dt * GRID_SPEED;
         const w = canvas.width;
         const h = canvas.height;
         const horizon = h * 0.4;
         const gridSize = 50;
         const speed = time * 40;
 
-        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
-
-        ctx.strokeStyle = `rgba(${colorRGB}, 0.25)`;
         ctx.lineWidth = 1;
 
         // Horizontal lines (perspective)
@@ -543,7 +805,7 @@ window.currentBgEffect = 'topo';
             const yOffset = (i * gridSize + (speed % gridSize));
             const y = horizon + (Math.pow(yOffset / h, 2) * h * 1.5);
             if (y > h) continue;
-            
+
             const alpha = Math.max(0, (y - horizon) / (h - horizon)) * 0.5;
             ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
             ctx.beginPath();
@@ -554,12 +816,11 @@ window.currentBgEffect = 'topo';
 
         // Vertical lines (perspective)
         const verticalCount = 12;
+        ctx.strokeStyle = `rgba(${colorRGB}, 0.3)`;
         for (let i = -verticalCount; i <= verticalCount; i++) {
             const xTop = w / 2 + (i * (w / verticalCount) * 0.1);
             const xBottom = w / 2 + (i * w * 0.8);
-            
-            const alpha = 0.3;
-            ctx.strokeStyle = `rgba(${colorRGB}, ${alpha})`;
+
             ctx.beginPath();
             ctx.moveTo(xTop, horizon);
             ctx.lineTo(xBottom, h);
@@ -568,15 +829,15 @@ window.currentBgEffect = 'topo';
     }
 
     // --- VHS Glitch Logic ---
-    function drawGlitch() {
-        time += 0.05;
+    function drawGlitch(dt) {
         const w = canvas.width;
         const h = canvas.height;
-
-        const colorRGB = getComputedStyle(document.documentElement).getPropertyValue('--effect-color-rgb').trim();
+        // Event chances were tuned per frame at 60 fps; scale by elapsed time
+        // so they happen as often per second at any frame rate.
+        const frames60 = dt * 60;
 
         // Random horizontal scans
-        if (Math.random() > 0.8) {
+        if (Math.random() < 0.2 * frames60) {
             ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.05})`;
             ctx.fillRect(0, Math.random() * h, w, Math.random() * 10);
         }
@@ -591,40 +852,65 @@ window.currentBgEffect = 'topo';
         }
 
         // Chromatic split lines (occasional)
-        if (Math.random() > 0.95) {
+        if (Math.random() < 0.05 * frames60) {
             const y = Math.random() * h;
             const offset = Math.random() * 5;
             // Use user color for split lines too
             ctx.fillStyle = `rgba(${colorRGB}, 0.2)`;
             ctx.fillRect(offset, y, w, 2);
-            ctx.fillStyle = `rgba(${colorRGB}, 0.2)`;
             ctx.fillRect(-offset, y + 2, w, 2);
         }
     }
 
-    function mainLoop() {
+    const drawers = { topo: drawTopo, grid: drawGrid, glitch: drawGlitch };
+
+    function frame(now) {
+        rafId = requestAnimationFrame(frame);
+
+        // FPS limit: accumulate real time and draw once a frame interval has passed.
+        const interval = 1 / fps;
+        frameBudget += lastTick ? (now - lastTick) / 1000 : interval;
+        lastTick = now;
+        if (frameBudget < interval) return;
+        frameBudget = Math.min(frameBudget - interval, interval);
+
+        // Clamp so a stall (pause, hidden window) doesn't jump the animation.
+        const dt = lastDraw ? Math.min((now - lastDraw) / 1000, 0.1) : interval;
+        lastDraw = now;
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (window.currentBgEffect === 'none') {
-            // Animation is off, do nothing
-        } else {
-            switch (window.currentBgEffect) {
-                case 'topo':
-                    drawTopo();
-                    break;
-                case 'grid':
-                    drawGrid();
-                    break;
-                case 'glitch':
-                    drawGlitch();
-                    break;
-            }
-        }
-
-        requestAnimationFrame(mainLoop);
+        drawers[effect](dt);
     }
 
-    mainLoop();
+    function start() {
+        if (rafId) return;
+        lastTick = 0;
+        lastDraw = 0;
+        frameBudget = 0;
+        rafId = requestAnimationFrame(frame);
+    }
+
+    function stop() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = 0;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function setEffect(next) {
+        effect = next;
+        if (drawers[effect]) start(); else stop(); // 'none' (or unknown) → no loop at all
+    }
+
+    function setColor(rgb) {
+        colorRGB = rgb;
+    }
+
+    function setFps(value) {
+        if (value > 0) fps = value;
+    }
+
+    setEffect(effect);
+    return { setEffect, setColor, setFps };
 })();
 
 // ==========================================
@@ -654,17 +940,17 @@ function setClaudeBar(prefix, windowData) {
     if (!pctEl || !barEl || !resetEl) return;
 
     if (!windowData) {
-        pctEl.textContent = '--%';
+        setText(pctEl, '--%');
         barEl.style.width = '0%';
-        resetEl.innerHTML = '&nbsp;';
+        setText(resetEl, ' ');
         return;
     }
 
-    pctEl.textContent = windowData.pct + '%';
+    setText(pctEl, windowData.pct + '%');
     barEl.style.width = windowData.pct + '%';
     barEl.classList.toggle('crit', windowData.pct >= 90);
     barEl.classList.toggle('warn', windowData.pct >= 70 && windowData.pct < 90);
-    resetEl.textContent = formatClaudeReset(windowData.resets_at) || ' ';
+    setText(resetEl, formatClaudeReset(windowData.resets_at) || ' ');
 }
 
 function updateClaudeUsage(usage) {
@@ -707,6 +993,19 @@ function updateClaudeUsage(usage) {
     const cpuTempEl = document.getElementById('cpu-temp');
     const gpuUsageEl = document.getElementById('gpu-usage');
     const gpuTempEl = document.getElementById('gpu-temp');
+    const cpuCircleEl = document.getElementById('cpu-circle');
+    const gpuCircleEl = document.getElementById('gpu-circle');
+    const gpuFanEl = document.getElementById('gpu-fan');
+    const nextTitleEl = document.getElementById('next-track-title');
+    const nextArtistEl = document.getElementById('next-track-artist');
+    const nextArtEl = document.getElementById('next-album-art');
+    const EMPTY_NEXT_ART = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/></svg>";
+
+    // Last values written, so the 2 s updates only touch what changed
+    let lastCpuUsage = null;
+    let lastGpuUsage = null;
+    let lastSpinSpeed = '';
+    let lastNextArt = '';
 
     const WS_URL = 'ws://localhost:3985';
     const RECONNECT_DELAY = 5000; // Try reconnecting every 5 seconds
@@ -735,39 +1034,46 @@ function updateClaudeUsage(usage) {
                 const cpuUsage = data.cpu_usage || 0;
                 const gpuUsage = data.gpu_usage || 0;
                 
-                cpuUsageEl.textContent = cpuUsage + '%';
-                cpuTempEl.textContent = (data.cpu_temp > 0) ? data.cpu_temp + '°C' : '--°C';
-                gpuUsageEl.textContent = gpuUsage + '%';
-                gpuTempEl.textContent = (data.gpu_temp > 0) ? data.gpu_temp + '°C' : '--°C';
+                setText(cpuUsageEl, cpuUsage + '%');
+                setText(cpuTempEl, (data.cpu_temp > 0) ? data.cpu_temp + '°C' : '--°C');
+                setText(gpuUsageEl, gpuUsage + '%');
+                setText(gpuTempEl, (data.gpu_temp > 0) ? data.gpu_temp + '°C' : '--°C');
 
                 // Update circle progress bars
                 // circumference = 2 * Math.PI * 42 ≈ 263.89
                 const maxDash = 264;
-                const cpuOffset = maxDash - (cpuUsage / 100) * maxDash;
-                const gpuOffset = maxDash - (gpuUsage / 100) * maxDash;
-                
-                document.getElementById('cpu-circle').style.strokeDashoffset = cpuOffset;
-                document.getElementById('gpu-circle').style.strokeDashoffset = gpuOffset;
+                if (cpuUsage !== lastCpuUsage) {
+                    lastCpuUsage = cpuUsage;
+                    cpuCircleEl.style.strokeDashoffset = maxDash - (cpuUsage / 100) * maxDash;
+                }
+                if (gpuUsage !== lastGpuUsage) {
+                    lastGpuUsage = gpuUsage;
+                    gpuCircleEl.style.strokeDashoffset = maxDash - (gpuUsage / 100) * maxDash;
+                }
 
                 // Update GPU Fan Spin Speed
-                // Usage 0% -> 5s (slow), Usage 100% -> 0.2s (fast)
-                const usage = data.gpu_usage || 0;
-                const spinDuration = 5 - (usage / 100) * 4.8; 
-                document.documentElement.style.setProperty('--gpu-spin-speed', `${spinDuration.toFixed(2)}s`);
+                // Usage 0% -> 5s (slow), Usage 100% -> 0.2s (fast). Quantized to 10%
+                // steps (each duration change makes the running spin jump) and set
+                // on the fan itself — on :root it re-styled the whole document.
+                const spinSpeed = (5 - Math.round(gpuUsage / 10) * 0.48).toFixed(2) + 's';
+                if (spinSpeed !== lastSpinSpeed) {
+                    lastSpinSpeed = spinSpeed;
+                    gpuFanEl.style.setProperty('--gpu-spin-speed', spinSpeed);
+                }
 
                 // Update Spotify Next Song
+                let nextArt = EMPTY_NEXT_ART;
                 if (data.spotify_next) {
-                    document.getElementById('next-track-title').textContent = data.spotify_next.title;
-                    document.getElementById('next-track-artist').textContent = data.spotify_next.artist;
-                    if (data.spotify_next.art) {
-                        document.getElementById('next-album-art').src = data.spotify_next.art;
-                    } else {
-                        document.getElementById('next-album-art').src = "assets/default_art.jpg";
-                    }
+                    setText(nextTitleEl, data.spotify_next.title);
+                    setText(nextArtistEl, data.spotify_next.artist);
+                    nextArt = data.spotify_next.art || "assets/default_art.jpg";
                 } else {
-                    document.getElementById('next-track-title').textContent = "End of Queue";
-                    document.getElementById('next-track-artist').textContent = "No next song";
-                    document.getElementById('next-album-art').src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='%231a1a2e'/></svg>";
+                    setText(nextTitleEl, "End of Queue");
+                    setText(nextArtistEl, "No next song");
+                }
+                if (nextArt !== lastNextArt) {
+                    lastNextArt = nextArt;
+                    nextArtEl.src = nextArt;
                 }
 
                 // Update Claude Usage
@@ -801,16 +1107,20 @@ function updateClaudeUsage(usage) {
 // ==========================================
 // Weather Logic (Open-Meteo)
 // ==========================================
+let weatherRequestId = 0;
+
 async function updateWeather() {
+    const requestId = ++weatherRequestId;
     const latitude = 13.7911328;
     const longitude = 100.5761852;
     document.getElementById('weather-city').textContent = "Bangkok, Sutthisan";
-    
+
     try {
         // 2. Weather
         const unit = weatherUnit === 'fahrenheit' ? '&temperature_unit=fahrenheit' : '';
         const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true${unit}`);
         const weatherData = await weatherRes.json();
+        if (requestId !== weatherRequestId) return; // a newer request (e.g. unit change) superseded this one
 
         if (weatherData.current_weather) {
             const { temperature, weathercode } = weatherData.current_weather;
@@ -821,7 +1131,7 @@ async function updateWeather() {
             document.getElementById('weather-icon-container').textContent = condition.icon;
         }
     } catch (e) {
-        document.getElementById('weather-city').textContent = "Weather Error";
+        if (requestId === weatherRequestId) document.getElementById('weather-city').textContent = "Weather Error";
     }
 }
 

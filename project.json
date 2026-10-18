@@ -112,6 +112,24 @@
         "max": 200,
         "value": 100
       },
+      "clock_weight": {
+        "text": "Clock — Font Weight",
+        "type": "slider",
+        "min": 100,
+        "max": 900,
+        "value": 200
+      },
+      "clock_use_custom_color": {
+        "text": "Clock — Use Custom Color",
+        "type": "bool",
+        "value": false
+      },
+      "clock_color": {
+        "text": "Clock — Font Color",
+        "type": "color",
+        "value": "1 1 1",
+        "condition": "clock_use_custom_color.value == true"
+      },
       "music_x": {
         "text": "Music Player — Horizontal Position",
         "type": "slider",
@@ -141,7 +159,7 @@
       "show_gpu_fan": {
         "text": "Show Animated GPU Fan",
         "type": "bool",
-        "value": true
+        "value": false
       },
       "stats_x": {
         "text": "HW Stats — Horizontal Position",
