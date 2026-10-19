@@ -265,6 +265,7 @@ function renderLyrics(lyrics) {
     });
     activeLyricIndex = -1;
     lyricsEl.replaceChildren(...lyricLineEls);
+    cancelAnimationFrame(lyricsScrollRaf);
     document.getElementById('lyrics-section').scrollTop = 0;
 }
 
@@ -316,8 +317,34 @@ window.wallpaperRegisterMediaTimelineListener((event) => {
     const container = document.getElementById('lyrics-section');
     line.classList.add('active');
     const offset = line.offsetTop - (container.offsetHeight / 2) + (line.offsetHeight / 2);
-    container.scrollTo({ top: offset, behavior: 'smooth' });
+    scrollLyricsTo(container, offset);
 });
+
+// Eases the lyrics scroll in 12 steps over 0.4 s (~30 updates/s). Native smooth
+// scrolling animates at the display's full refresh rate, and every step
+// re-blurs the lyrics card.
+const LYRICS_SCROLL_MS = 400;
+const LYRICS_SCROLL_STEPS = 12;
+let lyricsScrollRaf = 0;
+
+function scrollLyricsTo(container, top) {
+    cancelAnimationFrame(lyricsScrollRaf);
+    const start = container.scrollTop;
+    const distance = top - start;
+    const t0 = performance.now();
+    let lastStep = 0;
+
+    function tick(now) {
+        const step = Math.min(Math.floor((now - t0) / LYRICS_SCROLL_MS * LYRICS_SCROLL_STEPS) + 1, LYRICS_SCROLL_STEPS);
+        if (step !== lastStep) {
+            lastStep = step;
+            const progress = 1 - Math.pow(1 - step / LYRICS_SCROLL_STEPS, 3); // ease-out cubic
+            container.scrollTop = start + distance * progress;
+        }
+        lyricsScrollRaf = step < LYRICS_SCROLL_STEPS ? requestAnimationFrame(tick) : 0;
+    }
+    lyricsScrollRaf = requestAnimationFrame(tick);
+}
 
 let albumArtSrc = '';
 let albumArtToken = 0;

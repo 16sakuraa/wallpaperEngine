@@ -61,8 +61,10 @@
     --glass-border-highlight: rgba(255, 255, 255, 0.25);
     --glass-blur: 24px;
     --glass-radius: 22px;
+    /* No wide outer shadow: when a card updates, Chromium repaints the card plus
+       its shadow area, and a shadow reaching into a neighbouring glass card
+       makes that card re-blur only the overlapped strip (a visible seam). */
     --glass-shadow:
-        0 2px 16px rgba(0, 0, 0, 0.25),
         0 0 1px rgba(255, 255, 255, 0.1),
         inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -458,7 +460,7 @@ body {
     padding: 30px 20px;
     mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
     scrollbar-width: none;
-    scroll-behavior: smooth;
+    /* No scroll-behavior: smooth — script.js steps the scroll at ~30 fps */
 }
 
 .lyrics-section::-webkit-scrollbar {
@@ -479,7 +481,11 @@ body {
     line-height: 1.4;
     font-weight: 500;
     color: var(--text-color-sub);
-    transition: all 0.4s ease;
+    /* WE's CEF runs CSS transitions at the fastest monitor's refresh rate
+       (164 Hz here), re-blurring the lyrics card every frame. steps() caps
+       the visible updates at ~30/s; font-weight isn't animated because each
+       intermediate weight re-lays out the text. */
+    transition: opacity 0.4s steps(12), transform 0.4s steps(12), color 0.4s steps(12);
     opacity: 0.4;
     transform: scale(0.9);
 }
@@ -709,7 +715,8 @@ body {
     stroke: var(--circle-color);
     stroke-width: 6;
     stroke-linecap: round;
-    transition: stroke-dashoffset 0.5s ease-out;
+    /* Stepped to ~30 updates/s instead of the 164 Hz transition rate (see .lyric-line) */
+    transition: stroke-dashoffset 0.5s steps(15);
 }
 
 .circle-content {
