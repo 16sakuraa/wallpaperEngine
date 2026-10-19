@@ -1,20 +1,22 @@
-require('dotenv').config();
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const ENV_PATH = path.join(__dirname, '.env');
+require('dotenv').config({ path: ENV_PATH });
 const express = require('express');
 const axios = require('axios');
 const querystring = require('querystring');
 const WebSocket = require('ws');
 const si = require('systeminformation');
-const { execSync } = require('child_process');
+const { execFile } = require('child_process');
 
-const PORT = 3985;
+const PORT = parseInt(process.env.HW_PORT, 10) || 3985;
 const POLL_INTERVAL_MS = 2000;
+const LHM_URL = process.env.LHM_URL || 'http://localhost:8085/data.json';
 
-const wss = new WebSocket.Server({ port: PORT });
+const wss = new WebSocket.Server({ host: '127.0.0.1', port: PORT });
 
-console.log(`[HW Monitor] WebSocket server running on ws://localhost:${PORT}`);
+console.log(`[HW Monitor] WebSocket server running on ws://127.0.0.1:${PORT}`);
 console.log(`[HW Monitor] Polling hardware every ${POLL_INTERVAL_MS / 1000}s`);
 console.log('[HW Monitor] Press Ctrl+C to stop.\n');
 
@@ -30,6 +32,9 @@ let latestData = {
 wss.on('connection', (ws) => {
     console.log('[HW Monitor] Wallpaper connected.');
     ws.send(JSON.stringify(latestData));
+    // Polling is paused while nobody is connected, so refresh right away
+    pollHardware();
+    fetchSpotifyNextSong();
     ws.on('close', () => {
         console.log('[HW Monitor] Wallpaper disconnected.');
     });
@@ -44,13 +49,77 @@ function broadcast(data) {
     });
 }
 
+/**
+ * Run an executable directly (no shell) without blocking the event loop.
+ * Resolves with trimmed stdout; rejects on spawn failure, non-zero exit or timeout.
+ */
+function runFile(file, args, timeout) {
+    return new Promise((resolve, reject) => {
+        execFile(file, args, { timeout, windowsHide: true }, (err, stdout) => {
+            if (err) reject(err);
+            else resolve(String(stdout).trim());
+        });
+    });
+}
+
 // ==========================================
-// NVIDIA GPU via nvidia-smi (more reliable)
+// LibreHardwareMonitor web server (data.json)
 // ==========================================
+/**
+ * Fetch LHM's sensor tree (Options → Remote Web Server → Run, port 8085).
+ * Fetched once per poll; the same response feeds the CPU temp and the GPU stats.
+ * Returns null when LHM is unreachable.
+ */
+async function fetchLhmData() {
+    try {
+        const response = await axios.get(LHM_URL, { timeout: 1500 });
+        return response.data && typeof response.data === 'object' ? response.data : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// ==========================================
+// GPU: LHM first, nvidia-smi as fallback
+// ==========================================
+/**
+ * Find the NVIDIA GPU hardware node in the LHM tree and read
+ * "Temperatures > GPU Core" and "Load > GPU Core" (e.g. "39.4 °C", "6.0 %").
+ * The iGPU (AMD Radeon / ati.png) is skipped. Returns null if no core temp is found.
+ */
+function findLhmGpu(root) {
+    let gpu = null;
+    const visit = (n) => {
+        if (!n || gpu) return;
+        if (/nvidia\.png/i.test(n.ImageURL || '') || /^nvidia /i.test(n.Text || '')) {
+            gpu = n;
+            return;
+        }
+        if (Array.isArray(n.Children)) n.Children.forEach(visit);
+    };
+    visit(root);
+    if (!gpu) return null;
+
+    const readSensor = (group, name) => {
+        const g = (gpu.Children || []).find(c => c.Text === group);
+        const s = g && (g.Children || []).find(c => c.Text === name);
+        return s ? parseFloat(String(s.Value || '').replace(',', '.')) : NaN;
+    };
+
+    const temp = readSensor('Temperatures', 'GPU Core');
+    if (!(temp > 0 && temp < 150)) return null;
+    const load = readSensor('Load', 'GPU Core');
+    return {
+        temp: Math.round(temp),
+        util: isNaN(load) ? 0 : Math.round(load)
+    };
+}
+
+const NVIDIA_SMI_ARGS = ['--query-gpu=temperature.gpu,utilization.gpu', '--format=csv,noheader,nounits'];
 let nvidiaSmiPath = null;
 let nvidiaSmiChecked = false;
 
-function findNvidiaSmi() {
+async function findNvidiaSmi() {
     if (nvidiaSmiChecked) return nvidiaSmiPath;
     nvidiaSmiChecked = true;
 
@@ -62,10 +131,7 @@ function findNvidiaSmi() {
 
     for (const p of paths) {
         try {
-            execSync(`"${p}" --query-gpu=temperature.gpu --format=csv,noheader,nounits`, {
-                timeout: 3000,
-                stdio: 'pipe'
-            });
+            await runFile(p, NVIDIA_SMI_ARGS, 3000);
             nvidiaSmiPath = p;
             console.log(`[HW Monitor] Found nvidia-smi at: ${p}`);
             return p;
@@ -78,15 +144,12 @@ function findNvidiaSmi() {
     return null;
 }
 
-function getNvidiaGpuData() {
-    const smiPath = findNvidiaSmi();
+async function getNvidiaGpuData() {
+    const smiPath = await findNvidiaSmi();
     if (!smiPath) return null;
 
     try {
-        const output = execSync(
-            `"${smiPath}" --query-gpu=temperature.gpu,utilization.gpu --format=csv,noheader,nounits`,
-            { timeout: 3000, stdio: 'pipe' }
-        ).toString().trim();
+        const output = await runFile(smiPath, NVIDIA_SMI_ARGS, 3000);
 
         // If there are multiple GPUs, take the first one that has data (usually the discrete one)
         const lines = output.split('\n');
@@ -105,14 +168,42 @@ function getNvidiaGpuData() {
     return null;
 }
 
+/**
+ * GPU temp + load: LHM data (no process spawn), then nvidia-smi, then systeminformation.
+ */
+async function getGpuData(lhmData) {
+    const lhmGpu = lhmData && findLhmGpu(lhmData);
+    if (lhmGpu) return lhmGpu;
+
+    const smiGpu = await getNvidiaGpuData();
+    if (smiGpu) return smiGpu;
+
+    // Last resort: systeminformation (spawns several processes itself)
+    try {
+        const siGpu = await si.graphics();
+        const validGpu = siGpu.controllers.find(c => c.temperatureGpu > 0 || c.utilizationGpu > 0);
+        if (validGpu) {
+            return {
+                temp: Math.round(validGpu.temperatureGpu || 0),
+                util: Math.round(validGpu.utilizationGpu || 0)
+            };
+        }
+    } catch (e) {
+        // Ignore errors
+    }
+    return null;
+}
+
 // ==========================================
 // CPU Temperature via multiple fallbacks
 // ==========================================
+const CPU_TEMP_RETRY_MS = 30000;
 let cpuTempSource = 'unknown';
+let cpuTempLastRetry = 0;
 
 /**
- * Try LibreHardwareMonitor's built-in web server (Options → Remote Web Server → Run).
- * Fetches http://localhost:8085/data.json and walks the sensor tree for the CPU temp.
+ * Read the CPU temp from LibreHardwareMonitor's web server data (see fetchLhmData).
+ * Walks the sensor tree for the CPU temp.
  * More reliable than WMI on newer LHM builds, which don't always register the namespace.
  */
 function findLhmCpuTemp(node, underCpu) {
@@ -152,26 +243,17 @@ function findLhmCpuTemp(node, underCpu) {
     return Math.round(best);
 }
 
-async function getCpuTempLhmHttp() {
-    try {
-        const response = await axios.get('http://localhost:8085/data.json', { timeout: 2000 });
-        return findLhmCpuTemp(response.data, false);
-    } catch (e) {
-        return 0;
-    }
-}
-
 /**
  * Try LibreHardwareMonitor WMI namespace.
  * LHM must be running with "Remote Web Server" or WMI enabled.
  * This is the most reliable way to get AMD Ryzen CPU temps.
  */
-function getCpuTempLHM() {
+async function getCpuTempLHM() {
     try {
-        const output = execSync(
-            'powershell -NoProfile -Command "Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq \'Temperature\' -and $_.Name -match \'CPU|Core|Tctl|Tdie\' } | Sort-Object -Property Value -Descending | Select-Object -First 1 -ExpandProperty Value"',
-            { timeout: 5000, stdio: 'pipe' }
-        ).toString().trim();
+        const output = await runFile('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            "Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq 'Temperature' -and $_.Name -match 'CPU|Core|Tctl|Tdie' } | Sort-Object -Property Value -Descending | Select-Object -First 1 -ExpandProperty Value"
+        ], 5000);
 
         const temp = parseFloat(output);
         if (!isNaN(temp) && temp > 0 && temp < 150) {
@@ -186,12 +268,12 @@ function getCpuTempLHM() {
 /**
  * Try OpenHardwareMonitor WMI namespace (older alternative to LHM).
  */
-function getCpuTempOHM() {
+async function getCpuTempOHM() {
     try {
-        const output = execSync(
-            'powershell -NoProfile -Command "Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq \'Temperature\' -and $_.Name -match \'CPU|Core\' } | Sort-Object -Property Value -Descending | Select-Object -First 1 -ExpandProperty Value"',
-            { timeout: 5000, stdio: 'pipe' }
-        ).toString().trim();
+        const output = await runFile('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            "Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq 'Temperature' -and $_.Name -match 'CPU|Core' } | Sort-Object -Property Value -Descending | Select-Object -First 1 -ExpandProperty Value"
+        ], 5000);
 
         const temp = parseFloat(output);
         if (!isNaN(temp) && temp > 0 && temp < 150) {
@@ -206,12 +288,11 @@ function getCpuTempOHM() {
 /**
  * Try ACPI thermal zone (works on some Intel systems).
  */
-function getCpuTempWmi() {
+async function getCpuTempWmi() {
     try {
-        const output = execSync(
-            'wmic /namespace:\\\\root\\wmi PATH MSAcpi_ThermalZoneTemperature get CurrentTemperature 2>nul',
-            { timeout: 3000, stdio: 'pipe' }
-        ).toString().trim();
+        const output = await runFile('wmic', [
+            '/namespace:\\\\root\\wmi', 'PATH', 'MSAcpi_ThermalZoneTemperature', 'get', 'CurrentTemperature'
+        ], 3000);
 
         // Parse the output — skip the header line, grab the first number
         const lines = output.split('\n').map(l => l.trim()).filter(l => /^\d+$/.test(l));
@@ -231,8 +312,19 @@ function getCpuTempWmi() {
  * Get CPU temperature, trying multiple sources in order of reliability.
  * Caches which source works to avoid retrying failed sources every poll.
  */
-async function getCpuTemp() {
-    // 1. systeminformation (works if LHM/OHM is running, or on some Intel systems)
+async function getCpuTemp(lhmData) {
+    // 1. LibreHardwareMonitor web server — data.json is already fetched for this
+    //    poll, so it costs nothing and is always tried first
+    const httpTemp = lhmData ? findLhmCpuTemp(lhmData, false) : 0;
+    if (httpTemp > 0) {
+        if (cpuTempSource !== 'lhm-http') {
+            cpuTempSource = 'lhm-http';
+            console.log('[HW Monitor] CPU temp source: LibreHardwareMonitor web server');
+        }
+        return httpTemp;
+    }
+
+    // 2. systeminformation (works if OHM is running, or on some Intel systems)
     if (cpuTempSource === 'unknown' || cpuTempSource === 'si') {
         try {
             const cpuTemp = await si.cpuTemperature();
@@ -246,21 +338,9 @@ async function getCpuTemp() {
         } catch (e) { /* continue */ }
     }
 
-    // 2. LibreHardwareMonitor web server (data.json)
-    if (cpuTempSource === 'unknown' || cpuTempSource === 'lhm-http') {
-        const httpTemp = await getCpuTempLhmHttp();
-        if (httpTemp > 0) {
-            if (cpuTempSource === 'unknown') {
-                cpuTempSource = 'lhm-http';
-                console.log('[HW Monitor] CPU temp source: LibreHardwareMonitor web server');
-            }
-            return httpTemp;
-        }
-    }
-
     // 3. LibreHardwareMonitor WMI
     if (cpuTempSource === 'unknown' || cpuTempSource === 'lhm') {
-        const lhmTemp = getCpuTempLHM();
+        const lhmTemp = await getCpuTempLHM();
         if (lhmTemp > 0) {
             if (cpuTempSource === 'unknown') {
                 cpuTempSource = 'lhm';
@@ -270,9 +350,9 @@ async function getCpuTemp() {
         }
     }
 
-    // 3. OpenHardwareMonitor WMI
+    // 4. OpenHardwareMonitor WMI
     if (cpuTempSource === 'unknown' || cpuTempSource === 'ohm') {
-        const ohmTemp = getCpuTempOHM();
+        const ohmTemp = await getCpuTempOHM();
         if (ohmTemp > 0) {
             if (cpuTempSource === 'unknown') {
                 cpuTempSource = 'ohm';
@@ -282,9 +362,9 @@ async function getCpuTemp() {
         }
     }
 
-    // 4. ACPI WMI (legacy fallback)
+    // 5. ACPI WMI (legacy fallback)
     if (cpuTempSource === 'unknown' || cpuTempSource === 'wmi') {
-        const wmiTemp = getCpuTempWmi();
+        const wmiTemp = await getCpuTempWmi();
         if (wmiTemp > 0) {
             if (cpuTempSource === 'unknown') {
                 cpuTempSource = 'wmi';
@@ -297,6 +377,7 @@ async function getCpuTemp() {
     // Nothing worked
     if (cpuTempSource === 'unknown') {
         cpuTempSource = 'none';
+        cpuTempLastRetry = Date.now();
         console.log('[HW Monitor] ⚠ No CPU temperature source available.');
         console.log('[HW Monitor]   AMD Ryzen CPUs require LibreHardwareMonitor running as Administrator.');
         console.log('[HW Monitor]   In LHM: Options → Remote Web Server → Run (port 8085).');
@@ -309,39 +390,39 @@ async function getCpuTemp() {
 // ==========================================
 // Poll hardware data
 // ==========================================
+let hwPollInFlight = false;
+
 async function pollHardware() {
+    // Skip while no wallpaper is connected, or while a slow fallback from the
+    // previous poll is still running
+    if (hwPollInFlight || wss.clients.size === 0) return;
+    hwPollInFlight = true;
+
     try {
-        // CPU usage via systeminformation (this always works)
-        const cpuLoad = await si.currentLoad();
+        // CPU usage via systeminformation (this always works), plus one LHM
+        // data.json fetch shared by the CPU temp and GPU readers
+        const [cpuLoad, lhmData] = await Promise.all([si.currentLoad(), fetchLhmData()]);
         latestData.cpu_usage = Math.round(cpuLoad.currentLoad || 0);
 
-        // CPU temp: try multiple sources
-        latestData.cpu_temp = await getCpuTemp();
-
-        // Periodically retry finding a source if none was found
-        if (cpuTempSource === 'none' && Date.now() % 30000 < POLL_INTERVAL_MS) {
-            cpuTempSource = 'unknown'; // Reset to retry
-        }
-
-        // GPU: use nvidia-smi directly
-        const gpuData = getNvidiaGpuData();
+        // CPU temp: try multiple sources; GPU: LHM, then nvidia-smi, then systeminformation
+        const [cpuTemp, gpuData] = await Promise.all([getCpuTemp(lhmData), getGpuData(lhmData)]);
+        latestData.cpu_temp = cpuTemp;
         if (gpuData) {
             latestData.gpu_temp = gpuData.temp;
             latestData.gpu_usage = gpuData.util;
-        } else {
-            // Fallback to systeminformation if nvidia-smi fails
-            const siGpu = await si.graphics();
-            const validGpu = siGpu.controllers.find(c => c.temperatureGpu > 0 || c.utilizationGpu > 0);
-            if (validGpu) {
-                latestData.gpu_temp = Math.round(validGpu.temperatureGpu || 0);
-                latestData.gpu_usage = Math.round(validGpu.utilizationGpu || 0);
-            }
+        }
+
+        // Periodically retry finding a source if none was found
+        if (cpuTempSource === 'none' && Date.now() - cpuTempLastRetry >= CPU_TEMP_RETRY_MS) {
+            cpuTempSource = 'unknown'; // Reset to retry
         }
 
         broadcast(latestData);
 
     } catch (err) {
         console.error('[HW Monitor] Error polling hardware:', err.message);
+    } finally {
+        hwPollInFlight = false;
     }
 }
 
@@ -358,20 +439,20 @@ process.on('SIGINT', () => {
 // Spotify API Integration
 // ==========================================
 const spotifyApp = express();
-const SPOTIFY_PORT = 8888;
+const SPOTIFY_PORT = parseInt(process.env.SPOTIFY_PORT, 10) || 8888;
 let spotifyAccessToken = '';
 let spotifyTokenExpiry = 0;
 
 function updateEnvFile(key, value) {
     try {
-        let envContent = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
+        let envContent = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
         const regex = new RegExp(`^${key}=.*`, 'm');
         if (regex.test(envContent)) {
             envContent = envContent.replace(regex, `${key}=${value}`);
         } else {
             envContent += `\n${key}=${value}`;
         }
-        fs.writeFileSync('.env', envContent.trim());
+        fs.writeFileSync(ENV_PATH, envContent.trim());
     } catch (e) {
         console.error('[Spotify] Failed to update .env', e);
     }
@@ -409,7 +490,8 @@ spotifyApp.get('/callback', async (req, res) => {
             headers: {
                 'content-type': 'application/x-www-form-urlencoded',
                 'Authorization': 'Basic ' + (Buffer.from(process.env.SPOTIFY_CLIENT_ID + ':' + process.env.SPOTIFY_CLIENT_SECRET).toString('base64'))
-            }
+            },
+            timeout: 10000
         });
 
         process.env.SPOTIFY_REFRESH_TOKEN = response.data.refresh_token;
@@ -427,7 +509,7 @@ spotifyApp.get('/callback', async (req, res) => {
     }
 });
 
-spotifyApp.listen(SPOTIFY_PORT, () => {
+spotifyApp.listen(SPOTIFY_PORT, '127.0.0.1', () => {
     console.log(`[Spotify] Auth server running on http://127.0.0.1:${SPOTIFY_PORT}`);
     if (!process.env.SPOTIFY_REFRESH_TOKEN) {
         console.log(`[Spotify] PLEASE LOG IN: http://127.0.0.1:${SPOTIFY_PORT}/login`);
@@ -451,7 +533,8 @@ async function refreshSpotifyToken() {
             headers: {
                 'content-type': 'application/x-www-form-urlencoded',
                 'Authorization': 'Basic ' + (Buffer.from(process.env.SPOTIFY_CLIENT_ID + ':' + process.env.SPOTIFY_CLIENT_SECRET).toString('base64'))
-            }
+            },
+            timeout: 10000
         });
 
         spotifyAccessToken = response.data.access_token;
@@ -475,7 +558,8 @@ async function fetchSpotifyNextSong() {
         const response = await axios({
             method: 'get',
             url: 'https://api.spotify.com/v1/me/player/queue',
-            headers: { 'Authorization': 'Bearer ' + spotifyAccessToken }
+            headers: { 'Authorization': 'Bearer ' + spotifyAccessToken },
+            timeout: 5000
         });
 
         if (response.data && response.data.queue && response.data.queue.length > 0) {
@@ -496,7 +580,10 @@ async function fetchSpotifyNextSong() {
     }
 }
 
-setInterval(fetchSpotifyNextSong, 5000); // Fetch queue every 5 seconds
+// Fetch queue every 5 seconds while a wallpaper is connected
+setInterval(() => {
+    if (wss.clients.size > 0) fetchSpotifyNextSong();
+}, 5000);
 
 // ==========================================
 // Claude Code Usage (rate limit) Integration
