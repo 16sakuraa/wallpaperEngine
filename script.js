@@ -1145,15 +1145,23 @@ async function updateWeather() {
     try {
         // 2. Weather
         const unit = weatherUnit === 'fahrenheit' ? '&temperature_unit=fahrenheit' : '';
-        const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true${unit}`);
+        const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+            `&current=temperature_2m,weather_code,cloud_cover_low,cloud_cover_mid,is_day` +
+            `&hourly=precipitation&forecast_hours=2${unit}`);
         const weatherData = await weatherRes.json();
         if (requestId !== weatherRequestId) return; // a newer request (e.g. unit change) superseded this one
 
-        if (weatherData.current_weather) {
-            const { temperature, weathercode } = weatherData.current_weather;
-            document.getElementById('weather-temp').textContent = `${Math.round(temperature)}°`;
-            
-            const condition = mapWeatherCode(weathercode);
+        const current = weatherData.current;
+        if (current) {
+            document.getElementById('weather-temp').textContent = `${Math.round(current.temperature_2m)}°`;
+
+            // Rain for the hour we're in. Hourly values are the total over the preceding hour,
+            // so the hour containing `current.time` is the first entry after it.
+            const hourly = weatherData.hourly;
+            const idx = hourly ? hourly.time.findIndex(t => t > current.time) : -1;
+            const rainMmPerHour = idx >= 0 ? (hourly.precipitation[idx] ?? 0) : 0;
+
+            const condition = describeWeather(current, rainMmPerHour);
             document.getElementById('weather-desc').textContent = condition.desc;
             document.getElementById('weather-icon-container').textContent = condition.icon;
         }
@@ -1162,31 +1170,30 @@ async function updateWeather() {
     }
 }
 
-function mapWeatherCode(code) {
-    const codes = {
-        0: { desc: "Clear sky", icon: "☀️" },
-        1: { desc: "Mainly clear", icon: "🌤️" },
-        2: { desc: "Partly cloudy", icon: "⛅" },
-        3: { desc: "Overcast", icon: "☁️" },
-        45: { desc: "Fog", icon: "🌫️" },
-        48: { desc: "Depositing rime fog", icon: "🌫️" },
-        51: { desc: "Drizzle: Light", icon: "🌦️" },
-        53: { desc: "Drizzle: Moderate", icon: "🌦️" },
-        55: { desc: "Drizzle: Dense", icon: "🌦️" },
-        61: { desc: "Rain: Slight", icon: "🌧️" },
-        63: { desc: "Rain: Moderate", icon: "🌧️" },
-        65: { desc: "Rain: Heavy", icon: "🌧️" },
-        71: { desc: "Snow fall: Slight", icon: "❄️" },
-        73: { desc: "Snow fall: Moderate", icon: "❄️" },
-        75: { desc: "Snow fall: Heavy", icon: "❄️" },
-        80: { desc: "Rain showers: Slight", icon: "🌦️" },
-        81: { desc: "Rain showers: Moderate", icon: "🌦️" },
-        82: { desc: "Rain showers: Violent", icon: "🌧️" },
-        95: { desc: "Thunderstorm: Slight or moderate", icon: "⛈️" },
-        96: { desc: "Thunderstorm with slight hail", icon: "⛈️" },
-        99: { desc: "Thunderstorm with heavy hail", icon: "⛈️" }
-    };
-    return codes[code] || { desc: "Unknown", icon: "🌡️" };
+// The model's weather_code turns high cloud into "Overcast" and trace precipitation
+// into "Drizzle", so in Bangkok it over-reports both. Build the condition from low/mid
+// cloud and a rain threshold instead. Thresholds were picked against a week of Don Mueang
+// (VTBD) airport reports in Nov 2026: a first cut, not a validated tuning.
+const RAIN_MM_PER_HOUR = 0.5;
+
+function describeWeather(current, rainMmPerHour) {
+    const code = current.weather_code;
+    const night = current.is_day === 0;
+
+    if (rainMmPerHour >= RAIN_MM_PER_HOUR) {
+        if (code >= 95) return { desc: "Thunderstorm", icon: "⛈️" };
+        if (rainMmPerHour >= 7.6) return { desc: "Rain: Heavy", icon: "🌧️" };
+        if (rainMmPerHour >= 2.5) return { desc: "Rain: Moderate", icon: "🌧️" };
+        return { desc: "Rain: Slight", icon: "🌦️" };
+    }
+    if (code === 45 || code === 48) return { desc: "Fog", icon: "🌫️" };
+
+    const cover = Math.max(current.cloud_cover_low ?? 0, current.cloud_cover_mid ?? 0);
+    if (cover < 10) return { desc: night ? "Clear" : "Clear sky", icon: night ? "🌙" : "☀️" };
+    if (cover < 25) return { desc: "Mainly clear", icon: night ? "🌙" : "🌤️" };
+    if (cover < 60) return { desc: "Partly cloudy", icon: night ? "☁️" : "⛅" };
+    if (cover < 90) return { desc: "Mostly cloudy", icon: "☁️" };
+    return { desc: "Overcast", icon: "☁️" };
 }
 
 // Update weather every 30 minutes

@@ -118,13 +118,14 @@ All client-side logic lives in `script.js`. It contains event listeners for medi
 
 ### 3.5 Weather Module
 * **`async function updateWeather()`**
-  * **Path**: `c:\Users\Oat\Work\wallpaperEngine\script.js` (lines 715–737)
-  * **Description**: Periodically fetches weather details from the Open-Meteo API for coordinates hardcoded to Bangkok, Sutthisan (`13.7911328, 100.5761852`). The temperature query parameter adjusts according to the user's unit settings (Celsius vs Fahrenheit). Updates `#weather-temp`, description text, and icon container.
-* **`function mapWeatherCode(code)`**
-  * **Path**: `c:\Users\Oat\Work\wallpaperEngine\script.js` (lines 739–764)
+  * **Path**: `c:\Users\Oat\Work\wallpaperEngine\script.js` (lines 1139–1170)
+  * **Description**: Every 30 minutes, fetches Open-Meteo `current=` data (temperature, weather code, low/mid cloud cover, day/night) plus the hourly precipitation for the hour in progress, for coordinates hardcoded to Bangkok, Sutthisan (`13.7911328, 100.5761852`). Uses Open-Meteo's default model (ECMWF IFS for this location). The temperature query parameter adjusts according to the user's unit settings (Celsius vs Fahrenheit). Updates `#weather-temp`, description text, and icon container.
+* **`function describeWeather(current, rainMmPerHour)`**
+  * **Path**: `c:\Users\Oat\Work\wallpaperEngine\script.js` (lines 1172–1199)
   * **Parameters**:
-    * `code` (number): Numeric WMO weather code from Open-Meteo.
-  * **Description**: Translates WMO weather codes into plain English text descriptions (e.g. "Clear sky", "Partly cloudy", "Rain showers") and attaches corresponding emoji symbols.
+    * `current` (object): The `current` block of the Open-Meteo response.
+    * `rainMmPerHour` (number): Precipitation total for the hour in progress.
+  * **Description**: Picks the description text and emoji. Shows rain (or a thunderstorm when the weather code is 95+) only when precipitation is at least `RAIN_MM_PER_HOUR` (0.5 mm/h). Otherwise the sky condition comes from the larger of low and mid cloud cover, ignoring high cloud, with moon icons at night. The model's own weather code over-reported overcast skies and drizzle in Bangkok, so it is used only for thunderstorms and fog.
 
 ---
 
